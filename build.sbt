@@ -79,8 +79,14 @@ lazy val dockerSettings = Seq(
   }
 )
 
+lazy val coverageSettings = Seq(
+  coverageMinimum := 45,
+  coverageFailOnMinimum := false,
+  coverageExcludedPackages := ".*App.*;.*ProtobufUtils.*;.*grpc.*;.*BtcProtoUtils.*;.*CoinUtils.*"
+)
+
 lazy val sharedSettings =
-  assemblySettings ++ dockerSettings ++ Defaults.itSettings
+  assemblySettings ++ dockerSettings ++ Defaults.itSettings ++ coverageSettings
 
 lazy val lamaProtobuf = (project in file("protobuf"))
   .enablePlugins(Fs2Grpc)
@@ -96,8 +102,9 @@ lazy val common = (project in file("common"))
   .settings(
     name := "lama-common",
     libraryDependencies ++= (Dependencies.lamaCommon ++ Dependencies.test),
-    test in assembly := {},
-  ).dependsOn(lamaProtobuf)
+    test in assembly := {}
+  )
+  .dependsOn(lamaProtobuf)
 
 lazy val accountManager = (project in file("account-manager"))
   .enablePlugins(sbtdocker.DockerPlugin)
@@ -105,10 +112,9 @@ lazy val accountManager = (project in file("account-manager"))
   .settings(
     name := "lama-account-manager",
     sharedSettings,
-    libraryDependencies ++= (Dependencies.accountManager ++ Dependencies.test),
+    libraryDependencies ++= (Dependencies.accountManager ++ Dependencies.test)
   )
   .dependsOn(common)
-
 
 lazy val bitcoinProtobuf = (project in file("coins/bitcoin/protobuf"))
   .enablePlugins(Fs2Grpc)
