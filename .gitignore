@@ -12,4 +12,4 @@ target
 project/project
 project/target
 project/metals.sbt
-/.ivy2/
+.ivy2/
