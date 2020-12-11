@@ -7,7 +7,10 @@ import co.ledger.lama.bitcoin.common.grpc.{
   KeychainGrpcClientService
 }
 import co.ledger.lama.bitcoin.interpreter.protobuf
-import co.ledger.lama.bitcoin.transactor.grpc.BitcoinLibGrpcClientService
+import co.ledger.lama.bitcoin.transactor.grpc.{
+  BitcoinLibGrpcClientService,
+  BitcoinLibGrpcTransactor
+}
 import co.ledger.lama.common.grpc.HealthService
 import co.ledger.lama.common.logging.IOLogging
 import co.ledger.lama.common.services.Clients
@@ -44,11 +47,13 @@ object App extends IOApp with IOLogging {
       bitcoinLib         = new BitcoinLibGrpcClientService(grpcBitcoinLibClient)
 
       serviceDefinitions = List(
-        new BitcoinLibTransactor(
-          bitcoinLib,
-          explorerService,
-          keychainService,
-          interpreterService
+        new BitcoinLibGrpcTransactor(
+          new BitcoinLibTransactor(
+            bitcoinLib,
+            explorerService,
+            keychainService,
+            interpreterService
+          )
         ).definition,
         new HealthService().definition
       )

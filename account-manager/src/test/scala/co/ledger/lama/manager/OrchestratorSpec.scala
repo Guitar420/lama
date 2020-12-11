@@ -5,8 +5,10 @@ import java.util.UUID
 
 import cats.effect.{ContextShift, IO, Timer}
 import co.ledger.lama.common.models._
+import co.ledger.lama.common.models.messages.{ReportMessage, WorkerMessage}
 import co.ledger.lama.common.utils.IOAssertion
 import fs2.{Pipe, Stream}
+import io.circe.JsonObject
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 
@@ -27,9 +29,9 @@ class OrchestratorSpec extends AnyFlatSpecLike with Matchers {
 
     orchestrator.run(Some(takeNbElements)).compile.drain.map { _ =>
       orchestrator.tasks.foreach { t =>
-        t.publishedEvents.keys should have size nbAccounts
-        t.publishedEvents.values.foreach(_ should have size takeNbElements)
-        t.reportedEvents should have size nbAccounts
+        t.publishedWorkerMessages.keys should have size nbAccounts
+        t.publishedWorkerMessages.values.foreach(_ should have size takeNbElements)
+        t.reportedMessages should have size nbAccounts
         t.triggeredEvents should have size takeNbElements * nbAccounts
       }
     }
@@ -40,63 +42,77 @@ class OrchestratorSpec extends AnyFlatSpecLike with Matchers {
 class FakeOrchestrator(nbEvents: Int, override val awakeEvery: FiniteDuration)
     extends Orchestrator {
 
-  val syncEvents: Seq[WorkableEvent] =
+  val workerMessages: Seq[WorkerMessage[JsonObject]] = {
+    val now = Instant.now()
+
     (1 to nbEvents).map { i =>
-      val accountIdentifier = AccountIdentifier(s"xpub-$i", CoinFamily.Bitcoin, Coin.Btc)
-      val now               = Instant.now()
-      WorkableEvent(
-        accountId = UUID.randomUUID(),
+      val account = AccountIdentifier(s"xpub-$i", CoinFamily.Bitcoin, Coin.Btc)
+      val event = WorkableEvent[JsonObject](
+        accountId = account.id,
         syncId = UUID.randomUUID(),
         status = Status.Registered,
-        payload = SyncEvent.Payload(accountIdentifier),
+        cursor = None,
+        error = None,
         time = now
       )
-    }
 
-  val tasks: List[FakeSyncEventTask] = List(new FakeSyncEventTask(syncEvents))
+      WorkerMessage(account, event)
+    }
+  }
+
+  val tasks: List[FakeSyncEventTask] = List(new FakeSyncEventTask(workerMessages))
 
 }
 
-class FakeSyncEventTask(events: Seq[WorkableEvent]) extends SyncEventTask {
+class FakeSyncEventTask(workerMessages: Seq[WorkerMessage[JsonObject]]) extends SyncEventTask {
 
-  var reportedEvents: mutable.Seq[SyncEvent] = mutable.Seq.empty
+  var reportedMessages: mutable.Seq[ReportMessage[JsonObject]] = mutable.Seq.empty
 
-  var publishedEvents: mutable.Map[UUID, List[SyncEvent]] = mutable.Map.empty
+  var publishedWorkerMessages: mutable.Map[UUID, List[WorkerMessage[JsonObject]]] =
+    mutable.Map.empty
 
-  var triggeredEvents: mutable.Seq[SyncEvent] = mutable.Seq.empty
+  var triggeredEvents: mutable.Seq[SyncEvent[JsonObject]] = mutable.Seq.empty
 
-  def publishableEvents: Stream[IO, WorkableEvent] = Stream.emits(events)
+  def publishableWorkerMessages: Stream[IO, WorkerMessage[JsonObject]] =
+    Stream.emits(workerMessages)
 
-  def publishEventsPipe: Pipe[IO, WorkableEvent, Unit] =
-    _.evalMap(sp =>
+  def publishWorkerMessagePipe: Pipe[IO, WorkerMessage[JsonObject], Unit] =
+    _.evalMap { message =>
       IO.pure(
-        publishedEvents.update(
-          sp.accountId,
-          publishedEvents.getOrElse(sp.accountId, List.empty) :+ sp
+        publishedWorkerMessages.update(
+          message.account.id,
+          publishedWorkerMessages.getOrElse(message.account.id, List.empty) :+ message
+        )
+      )
+    }
+
+  def reportableMessages: Stream[IO, ReportMessage[JsonObject]] =
+    Stream.emits(
+      workerMessages.map(message =>
+        ReportMessage(message.account, message.event.asReportableSuccessEvent(None))
+      )
+    )
+
+  def reportMessagePipe: Pipe[IO, ReportMessage[JsonObject], Unit] =
+    _.evalMap { e =>
+      IO.pure { reportedMessages = reportedMessages :+ e }
+    }
+
+  def triggerableEvents: Stream[IO, TriggerableEvent[JsonObject]] =
+    Stream.emits(
+      workerMessages.map(message =>
+        TriggerableEvent(
+          message.account.id,
+          message.event.syncId,
+          Status.Synchronized,
+          message.event.cursor,
+          message.event.error,
+          Instant.now()
         )
       )
     )
 
-  def reportableEvents: Stream[IO, ReportableEvent] =
-    Stream.emits(
-      events.map(sp =>
-        ReportableEvent(sp.accountId, sp.syncId, Status.Synchronized, sp.payload, Instant.now())
-      )
-    )
-
-  def reportEventsPipe: Pipe[IO, ReportableEvent, Unit] =
-    _.evalMap { e =>
-      IO.pure { reportedEvents = reportedEvents :+ e }
-    }
-
-  def triggerableEvents: Stream[IO, TriggerableEvent] =
-    Stream.emits(
-      events.map(e =>
-        TriggerableEvent(e.accountId, e.syncId, Status.Synchronized, e.payload, Instant.now())
-      )
-    )
-
-  def triggerEventsPipe: Pipe[IO, TriggerableEvent, Unit] =
+  def triggerEventsPipe: Pipe[IO, TriggerableEvent[JsonObject], Unit] =
     _.evalMap { e =>
       IO.pure {
         triggeredEvents = triggeredEvents :+ e.nextWorkable

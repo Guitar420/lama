@@ -4,7 +4,7 @@ import java.util.UUID
 
 import cats.effect.IO
 import co.ledger.lama.common.logging.IOLogging
-import co.ledger.lama.common.models.{WithKey, WorkableEvent}
+import co.ledger.lama.common.models.messages.{WithBusinessId, WorkerMessage}
 import co.ledger.lama.common.utils.RabbitUtils
 import co.ledger.lama.manager.Exceptions.RedisUnexpectedException
 import com.redis.RedisClient
@@ -13,27 +13,26 @@ import com.redis.serialization.Parse.Implicits._
 import dev.profunktor.fs2rabbit.interpreter.RabbitClient
 import dev.profunktor.fs2rabbit.model.{ExchangeName, RoutingKey}
 import fs2.Stream
-import io.circe.{Decoder, Encoder}
+import io.circe.{Decoder, Encoder, JsonObject}
 import io.circe.parser.decode
 import io.circe.syntax._
 
 import scala.annotation.nowarn
 
-/**
-  * Publisher publishing events sequentially.
+/** Publisher publishing messages sequentially.
   * Redis is used as a FIFO queue to guarantee the sequence.
   */
-trait Publisher[K, V <: WithKey[K]] {
+trait Publisher[K, V <: WithBusinessId[K]] {
   import Publisher._
 
-  // Max concurrent ongoing events.
-  val maxOnGoingEvents: Int = 1
+  // Max concurrent ongoing messages.
+  val maxOnGoingMessages: Int = 1
 
   // Redis client.
   def redis: RedisClient
 
   // The inner publish function.
-  def publish(event: V): IO[Unit]
+  def publish(message: V): IO[Unit]
 
   // Implicits for serializing data as json and storing it as binary in redis.
   implicit val dec: Decoder[V]
@@ -49,30 +48,30 @@ trait Publisher[K, V <: WithKey[K]] {
 
   @nowarn
   implicit val fmt: Format =
-    Format {
-      case v: V => v.asJson.noSpaces.getBytes()
+    Format { case v: V =>
+      v.asJson.noSpaces.getBytes()
     }
 
-  // If the counter of ongoing events for the key has reached max ongoing events, add the event to the pending list.
-  // Otherwise, publish and increment the counter of ongoing events.
+  // If the counter of ongoing messages for the key has reached max ongoing messages, add the event to the pending list.
+  // Otherwise, publish and increment the counter of ongoing messages.
   def enqueue(e: V): IO[Unit] =
-    hasMaxOnGoingEvents(e.key).flatMap {
+    hasMaxOnGoingMessages(e.businessId).flatMap {
       case true =>
-        // enqueue pending events in redis
-        rpushPendingEvents(e)
+        // enqueue pending messages in redis
+        rpushPendingMessages(e)
       case false =>
-        // publish and increment the counter of ongoing events
+        // publish and increment the counter of ongoing messages
         publish(e)
-          .flatMap(_ => incrOnGoingEvents(e.key))
+          .flatMap(_ => incrOnGoingMessages(e.businessId))
     }.void
 
   // Remove the top pending event of a key and take the next pending event.
   // If next pending event exists, publish it.
   def dequeue(key: K): IO[Unit] =
     for {
-      countOnGoingEvents <- decrOnGoingEvents(key)
+      countOnGoingMessages <- decrOnGoingMessages(key)
       nextEvent <-
-        if (countOnGoingEvents < maxOnGoingEvents) lpopPendingEvents(key)
+        if (countOnGoingMessages < maxOnGoingMessages) lpopPendingMessages(key)
         else IO.pure(None)
       result <- nextEvent match {
         case Some(next) => publish(next)
@@ -80,55 +79,59 @@ trait Publisher[K, V <: WithKey[K]] {
       }
     } yield result
 
-  // Check if the counter of ongoing events has reached the max.
-  private def hasMaxOnGoingEvents(key: K): IO[Boolean] =
-    IO(redis.get[Int](onGoingEventsCounterKey(key)).exists(_ >= maxOnGoingEvents))
+  // Check if the counter of ongoing messages has reached the max.
+  private def hasMaxOnGoingMessages(key: K): IO[Boolean] =
+    IO(redis.get[Int](onGoingMessagesCounterKey(key)).exists(_ >= maxOnGoingMessages))
 
   // https://redis.io/commands/incr
-  // Increment the counter of ongoing events for a key and return the value after.
-  private def incrOnGoingEvents(key: K): IO[Long] =
-    IO.fromOption(redis.incr(onGoingEventsCounterKey(key)))(RedisUnexpectedException)
+  // Increment the counter of ongoing messages for a key and return the value after.
+  private def incrOnGoingMessages(key: K): IO[Long] =
+    IO.fromOption(redis.incr(onGoingMessagesCounterKey(key)))(RedisUnexpectedException)
 
   // https://redis.io/commands/decr
-  // Decrement the counter of ongoing events for a key and return the value after.
-  private def decrOnGoingEvents(key: K): IO[Long] =
-    IO.fromOption(redis.decr(onGoingEventsCounterKey(key)))(RedisUnexpectedException)
+  // Decrement the counter of ongoing messages for a key and return the value after.
+  private def decrOnGoingMessages(key: K): IO[Long] =
+    IO.fromOption(redis.decr(onGoingMessagesCounterKey(key)))(RedisUnexpectedException)
 
   // https://redis.io/commands/rpush
   // Add an event at the last and return the length after.
-  private def rpushPendingEvents(event: V): IO[Long] =
-    IO.fromOption(redis.rpush(pendingEventsKey(event.key), event))(RedisUnexpectedException)
+  private def rpushPendingMessages(event: V): IO[Long] =
+    IO.fromOption(redis.rpush(pendingMessagesKey(event.businessId), event))(
+      RedisUnexpectedException
+    )
 
   // https://redis.io/commands/lpop
   // Remove the first from a key and if exists, return the next one.
-  private def lpopPendingEvents(key: K): IO[Option[V]] =
-    IO(redis.lpop[V](pendingEventsKey(key)))
+  private def lpopPendingMessages(key: K): IO[Option[V]] =
+    IO(redis.lpop[V](pendingMessagesKey(key)))
 
 }
 
 object Publisher {
   // Stored keys.
-  def onGoingEventsCounterKey[K](key: K): String = s"on_going_events_counter_$key"
-  def pendingEventsKey[K](key: K): String        = s"pending_events_$key"
+  def onGoingMessagesCounterKey[K](key: K): String = s"on_going_messages_counter_$key"
+  def pendingMessagesKey[K](key: K): String        = s"pending_messages_$key"
 }
 
-class WorkableEventPublisher(
+class WorkerMessagePublisher(
     val redis: RedisClient,
     rabbit: RabbitClient[IO],
     exchangeName: ExchangeName,
     routingKey: RoutingKey
-)(implicit val enc: Encoder[WorkableEvent], val dec: Decoder[WorkableEvent])
-    extends Publisher[UUID, WorkableEvent]
+)(implicit val enc: Encoder[WorkerMessage[JsonObject]], val dec: Decoder[WorkerMessage[JsonObject]])
+    extends Publisher[UUID, WorkerMessage[JsonObject]]
     with IOLogging {
 
-  def publish(event: WorkableEvent): IO[Unit] =
+  def publish(message: WorkerMessage[JsonObject]): IO[Unit] =
     publisher
-      .evalMap(p => p(event) *> log.info(s"Published event: ${event.asJson.toString}"))
+      .evalMap(p =>
+        p(message) *> log.info(s"Published message to worker: ${message.asJson.toString}")
+      )
       .compile
       .drain
 
-  private val publisher: Stream[IO, WorkableEvent => IO[Unit]] =
-    RabbitUtils.createPublisher[WorkableEvent](
+  private val publisher: Stream[IO, WorkerMessage[JsonObject] => IO[Unit]] =
+    RabbitUtils.createPublisher[WorkerMessage[JsonObject]](
       rabbit,
       exchangeName,
       routingKey

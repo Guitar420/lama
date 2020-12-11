@@ -3,139 +3,186 @@ package co.ledger.lama.common.models
 import java.time.Instant
 import java.util.UUID
 
-import co.ledger.lama.common.models.implicits._
-import io.circe.{Decoder, Encoder, Json}
+import io.circe.{Decoder, Encoder}
 import io.circe.generic.extras.semiauto._
 import io.circe.syntax.EncoderOps
+import co.ledger.lama.manager.protobuf
+import co.ledger.lama.common.models.implicits._
+import co.ledger.lama.common.utils.{ByteStringUtils, TimestampProtoUtils, UuidUtils}
 
-sealed trait SyncEvent extends WithKey[UUID] {
+sealed trait SyncEvent[T] {
   def accountId: UUID
   def syncId: UUID
   def status: Status
-  def payload: SyncEvent.Payload
-  def key: UUID = accountId
+  def cursor: Option[T]
+  def error: Option[ReportError]
   def time: Instant
-}
 
-trait WithKey[K] { def key: K }
+  def toProto(implicit enc: Encoder[T]): protobuf.SyncEvent =
+    protobuf.SyncEvent(
+      accountId = UuidUtils.uuidToBytes(accountId),
+      syncId = UuidUtils.uuidToBytes(syncId),
+      status = status.name,
+      cursor = ByteStringUtils.serialize[T](cursor),
+      error = ByteStringUtils.serialize[ReportError](error),
+      time = Some(TimestampProtoUtils.serialize(time))
+    )
+}
 
 object SyncEvent {
 
-  implicit val encoder: Encoder[SyncEvent] =
+  implicit def encoder[T: Encoder]: Encoder[SyncEvent[T]] =
     Encoder.instance {
-      case re: ReportableEvent  => re.asJson
-      case we: WorkableEvent    => we.asJson
-      case te: TriggerableEvent => te.asJson
-      case ne: FlaggedEvent     => ne.asJson
+      case re: ReportableEvent[T]  => re.asJson
+      case we: WorkableEvent[T]    => we.asJson
+      case te: TriggerableEvent[T] => te.asJson
+      case ne: FlaggedEvent[T]     => ne.asJson
     }
 
-  implicit val decoder: Decoder[SyncEvent] =
-    Decoder[ReportableEvent]
-      .map[SyncEvent](identity)
-      .or(Decoder[WorkableEvent].map[SyncEvent](identity))
-      .or(Decoder[TriggerableEvent].map[SyncEvent](identity))
-      .or(Decoder[FlaggedEvent].map[SyncEvent](identity))
+  implicit def decoder[T: Decoder]: Decoder[SyncEvent[T]] = {
+    Decoder[ReportableEvent[T]]
+      .map[SyncEvent[T]](identity)
+      .or(Decoder[WorkableEvent[T]].map[SyncEvent[T]](identity))
+      .or(Decoder[TriggerableEvent[T]].map[SyncEvent[T]](identity))
+      .or(Decoder[FlaggedEvent[T]].map[SyncEvent[T]](identity))
+  }
 
-  def apply(
+  def apply[T](
       accountId: UUID,
       syncId: UUID,
       status: Status,
-      payload: SyncEvent.Payload,
+      cursor: Option[T],
+      error: Option[ReportError],
       time: Instant
-  ): SyncEvent =
+  ): SyncEvent[T] =
     status match {
-      case ws: WorkableStatus    => WorkableEvent(accountId, syncId, ws, payload, time)
-      case rs: ReportableStatus  => ReportableEvent(accountId, syncId, rs, payload, time)
-      case ts: TriggerableStatus => TriggerableEvent(accountId, syncId, ts, payload, time)
-      case ns: FlaggedStatus     => FlaggedEvent(accountId, syncId, ns, payload, time)
+      case ws: WorkableStatus =>
+        WorkableEvent(accountId, syncId, ws, cursor, error, time)
+      case rs: ReportableStatus =>
+        ReportableEvent(accountId, syncId, rs, cursor, error, time)
+      case ts: TriggerableStatus =>
+        TriggerableEvent(accountId, syncId, ts, cursor, error, time)
+      case ns: FlaggedStatus =>
+        FlaggedEvent(accountId, syncId, ns, cursor, error, time)
     }
 
-  case class Payload(
-      account: AccountIdentifier,
-      data: Json = Json.obj() // TODO: type it per coin and type of event?
-  )
-
-  object Payload {
-    implicit val encoder: Encoder[Payload] = deriveConfiguredEncoder[Payload]
-    implicit val decoder: Decoder[Payload] = deriveConfiguredDecoder[Payload]
-  }
+  def fromProto[T](proto: protobuf.SyncEvent)(implicit dec: Decoder[T]): SyncEvent[T] =
+    SyncEvent[T](
+      UuidUtils.bytesToUuid(proto.accountId).get,
+      UuidUtils.bytesToUuid(proto.syncId).get,
+      Status.fromKey(proto.status).get,
+      ByteStringUtils.deserialize[T](proto.cursor),
+      ByteStringUtils.deserialize[ReportError](proto.error),
+      TimestampProtoUtils.deserialize(proto.time.get)
+    )
 
 }
 
-case class WorkableEvent(
+case class WorkableEvent[T](
     accountId: UUID,
     syncId: UUID,
     status: WorkableStatus,
-    payload: SyncEvent.Payload,
+    cursor: Option[T],
+    error: Option[ReportError],
     time: Instant
-) extends SyncEvent {
-  def asPublished: FlaggedEvent =
-    FlaggedEvent(accountId, syncId, Status.Published, payload, Instant.now())
+) extends SyncEvent[T] {
+  def asPublished: FlaggedEvent[T] =
+    FlaggedEvent[T](
+      accountId,
+      syncId,
+      Status.Published,
+      cursor,
+      error,
+      Instant.now()
+    )
 
-  def reportSuccess(data: Json): ReportableEvent =
+  def asReportableSuccessEvent(newCursor: Option[T]): ReportableEvent[T] =
     ReportableEvent(
       accountId,
       syncId,
       status.success,
-      payload.copy(data = data.deepDropNullValues),
+      newCursor,
+      None,
       Instant.now()
     )
 
-  def reportFailure(data: Json): ReportableEvent = {
-    val updatedPayloadData = payload.data.deepMerge(data).deepDropNullValues
+  def asReportableFailureEvent(error: ReportError): ReportableEvent[T] = {
     ReportableEvent(
       accountId,
       syncId,
       status.failure,
-      payload.copy(data = updatedPayloadData),
+      cursor,
+      Some(error),
       Instant.now()
     )
   }
 }
 
 object WorkableEvent {
-  implicit val encoder: Encoder[WorkableEvent] = deriveConfiguredEncoder[WorkableEvent]
-  implicit val decoder: Decoder[WorkableEvent] = deriveConfiguredDecoder[WorkableEvent]
+  implicit def encoder[T: Encoder]: Encoder[WorkableEvent[T]] =
+    deriveConfiguredEncoder[WorkableEvent[T]]
+
+  implicit def decoder[T: Decoder]: Decoder[WorkableEvent[T]] =
+    deriveConfiguredDecoder[WorkableEvent[T]]
 }
 
-case class ReportableEvent(
+case class ReportableEvent[T](
     accountId: UUID,
     syncId: UUID,
     status: ReportableStatus,
-    payload: SyncEvent.Payload,
+    cursor: Option[T],
+    error: Option[ReportError],
     time: Instant
-) extends SyncEvent
+) extends SyncEvent[T]
 
 object ReportableEvent {
-  implicit val encoder: Encoder[ReportableEvent] = deriveConfiguredEncoder[ReportableEvent]
-  implicit val decoder: Decoder[ReportableEvent] = deriveConfiguredDecoder[ReportableEvent]
+  implicit def encoder[T: Encoder]: Encoder[ReportableEvent[T]] =
+    deriveConfiguredEncoder[ReportableEvent[T]]
+
+  implicit def decoder[T: Decoder]: Decoder[ReportableEvent[T]] =
+    deriveConfiguredDecoder[ReportableEvent[T]]
 }
 
-case class TriggerableEvent(
+case class TriggerableEvent[T](
     accountId: UUID,
     syncId: UUID,
     status: TriggerableStatus,
-    payload: SyncEvent.Payload,
+    cursor: Option[T],
+    error: Option[ReportError],
     time: Instant
-) extends SyncEvent {
-  def nextWorkable: WorkableEvent =
-    WorkableEvent(accountId, UUID.randomUUID(), status.nextWorkable, payload, Instant.now())
+) extends SyncEvent[T] {
+  def nextWorkable: WorkableEvent[T] =
+    WorkableEvent[T](
+      accountId,
+      UUID.randomUUID(),
+      status.nextWorkable,
+      cursor,
+      error,
+      Instant.now()
+    )
 }
 
 object TriggerableEvent {
-  implicit val encoder: Encoder[TriggerableEvent] = deriveConfiguredEncoder[TriggerableEvent]
-  implicit val decoder: Decoder[TriggerableEvent] = deriveConfiguredDecoder[TriggerableEvent]
+  implicit def encoder[T: Encoder]: Encoder[TriggerableEvent[T]] =
+    deriveConfiguredEncoder[TriggerableEvent[T]]
+
+  implicit def decoder[T: Decoder]: Decoder[TriggerableEvent[T]] =
+    deriveConfiguredDecoder[TriggerableEvent[T]]
 }
 
-case class FlaggedEvent(
+case class FlaggedEvent[T](
     accountId: UUID,
     syncId: UUID,
     status: FlaggedStatus,
-    payload: SyncEvent.Payload,
+    cursor: Option[T],
+    error: Option[ReportError],
     time: Instant
-) extends SyncEvent
+) extends SyncEvent[T]
 
 object FlaggedEvent {
-  implicit val encoder: Encoder[FlaggedEvent] = deriveConfiguredEncoder[FlaggedEvent]
-  implicit val decoder: Decoder[FlaggedEvent] = deriveConfiguredDecoder[FlaggedEvent]
+  implicit def encoder[T: Encoder]: Encoder[FlaggedEvent[T]] =
+    deriveConfiguredEncoder[FlaggedEvent[T]]
+
+  implicit def decoder[T: Decoder]: Decoder[FlaggedEvent[T]] =
+    deriveConfiguredDecoder[FlaggedEvent[T]]
 }

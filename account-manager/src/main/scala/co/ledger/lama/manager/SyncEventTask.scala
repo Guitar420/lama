@@ -3,8 +3,9 @@ package co.ledger.lama.manager
 import cats.effect.{ContextShift, IO, Timer}
 import io.circe.syntax._
 import co.ledger.lama.common.logging.IOLogging
-import co.ledger.lama.common.models._
 import co.ledger.lama.common.utils.RabbitUtils
+import co.ledger.lama.common.models._
+import co.ledger.lama.common.models.messages.{ReportMessage, WorkerMessage}
 import co.ledger.lama.manager.config.CoinConfig
 import com.redis.RedisClient
 import dev.profunktor.fs2rabbit.interpreter.RabbitClient
@@ -12,41 +13,42 @@ import dev.profunktor.fs2rabbit.model.ExchangeName
 import doobie.implicits._
 import doobie.util.transactor.Transactor
 import fs2.{Pipe, Stream}
+import io.circe.JsonObject
 
 import scala.concurrent.duration.FiniteDuration
 
 trait SyncEventTask {
 
-  // Source of publishable events.
-  def publishableEvents: Stream[IO, WorkableEvent]
+  // Source of worker messages to publish.
+  def publishableWorkerMessages: Stream[IO, WorkerMessage[JsonObject]]
 
   // Publish events pipe transformation:
-  // Stream[IO, SyncEvent] => Stream[IO, Unit].
-  def publishEventsPipe: Pipe[IO, WorkableEvent, Unit]
+  // Stream[IO, WorkerMessage[JsonObject]] => Stream[IO, Unit].
+  def publishWorkerMessagePipe: Pipe[IO, WorkerMessage[JsonObject], Unit]
 
-  // Awake every tick, source publishable events then publish.
-  def publishEvents(tick: FiniteDuration, stopAtNbTick: Option[Long] = None)(implicit
+  // Awake every tick, source worker messages then publish.
+  def publishWorkerMessages(tick: FiniteDuration, stopAtNbTick: Option[Long] = None)(implicit
       t: Timer[IO]
   ): Stream[IO, Unit] =
-    tickerStream(tick, stopAtNbTick) >> publishableEvents.through(publishEventsPipe)
+    tickerStream(tick, stopAtNbTick) >> publishableWorkerMessages.through(publishWorkerMessagePipe)
 
-  // Source of reportable events.
-  def reportableEvents: Stream[IO, ReportableEvent]
+  // Source of report messages to report.
+  def reportableMessages: Stream[IO, ReportMessage[JsonObject]]
 
   // Report events pipe transformation:
-  // Stream[IO, SyncEvent] => Stream[IO, Unit].
-  def reportEventsPipe: Pipe[IO, ReportableEvent, Unit]
+  // Stream[IO, ReportMessage[JsonObject]] => Stream[IO, Unit].
+  def reportMessagePipe: Pipe[IO, ReportMessage[JsonObject], Unit]
 
-  // Source reportable events then report.
-  def reportEvents: Stream[IO, Unit] =
-    reportableEvents.through(reportEventsPipe)
+  // Source reportable messages then report the event of messages.
+  def reportMessages: Stream[IO, Unit] =
+    reportableMessages.through(reportMessagePipe)
 
   // Source of triggerable events.
-  def triggerableEvents: Stream[IO, TriggerableEvent]
+  def triggerableEvents: Stream[IO, TriggerableEvent[JsonObject]]
 
   // Trigger events pipe transformation:
-  // Stream[IO, SyncEvent] => Stream[IO, Unit].
-  def triggerEventsPipe: Pipe[IO, TriggerableEvent, Unit]
+  // Stream[IO, TriggerableEvent[JsonObject]] => Stream[IO, Unit].
+  def triggerEventsPipe: Pipe[IO, TriggerableEvent[JsonObject], Unit]
 
   // Awake every tick, source triggerable events then trigger.
   def trigger(tick: FiniteDuration)(implicit
@@ -77,55 +79,55 @@ class CoinSyncEventTask(
     extends SyncEventTask
     with IOLogging {
 
-  // Fetch publishable events from database.
-  def publishableEvents: Stream[IO, WorkableEvent] =
+  // Fetch worker messages ready to publish from database.
+  def publishableWorkerMessages: Stream[IO, WorkerMessage[JsonObject]] =
     Queries
-      .fetchPublishableEvents(conf.coinFamily, conf.coin)
+      .fetchPublishableWorkerMessages(conf.coinFamily, conf.coin)
       .transact(db)
 
   // Publisher publishing to the worker exchange with routingKey = "coinFamily.coin".
   private val publisher =
-    new WorkableEventPublisher(
+    new WorkerMessagePublisher(
       redis,
       rabbit,
       workerExchangeName,
       conf.routingKey
     )
 
-  // Publish events to the worker exchange queue, mark as published then insert.
-  def publishEventsPipe: Pipe[IO, WorkableEvent, Unit] =
-    _.evalMap { e =>
-      publisher.enqueue(e) &>
+  // Publish messages to the worker exchange queue, mark event as published then insert.
+  def publishWorkerMessagePipe: Pipe[IO, WorkerMessage[JsonObject], Unit] =
+    _.evalMap { message =>
+      publisher.enqueue(message) &>
         Queries
-          .insertSyncEvent(e.asPublished)
+          .insertSyncEvent(message.event.asPublished)
           .transact(db)
           .void
     }
 
-  // Consume reportable events from the events exchange queue.
-  def reportableEvents: Stream[IO, ReportableEvent] =
+  // Consume messages to report from the events exchange queue.
+  def reportableMessages: Stream[IO, ReportMessage[JsonObject]] =
     RabbitUtils
-      .createAutoAckConsumer[ReportableEvent](
+      .createAutoAckConsumer[ReportMessage[JsonObject]](
         rabbit,
         conf.queueName(eventsExchangeName)
       )
 
   // Insert reportable events in database and publish next pending event.
-  def reportEventsPipe: Pipe[IO, ReportableEvent, Unit] =
-    _.evalMap { e =>
-      Queries.insertSyncEvent(e).transact(db).void *>
-        publisher.dequeue(e.accountId) *>
-        log.info(s"Reported event: ${e.asJson.toString}")
+  def reportMessagePipe: Pipe[IO, ReportMessage[JsonObject], Unit] =
+    _.evalMap { message =>
+      Queries.insertSyncEvent(message.event).transact(db).void *>
+        publisher.dequeue(message.account.id) *>
+        log.info(s"Reported message: ${message.asJson.toString}")
     }
 
   // Fetch triggerable events from database.
-  def triggerableEvents: Stream[IO, TriggerableEvent] =
+  def triggerableEvents: Stream[IO, TriggerableEvent[JsonObject]] =
     Queries
       .fetchTriggerableEvents(conf.coinFamily, conf.coin)
       .transact(db)
 
   // From triggerable events, construct next events then insert.
-  def triggerEventsPipe: Pipe[IO, TriggerableEvent, Unit] =
+  def triggerEventsPipe: Pipe[IO, TriggerableEvent[JsonObject], Unit] =
     _.evalMap { e =>
       Queries.insertSyncEvent(e.nextWorkable).transact(db).void *>
         log.info(s"Next event: ${e.nextWorkable.asJson.toString}")

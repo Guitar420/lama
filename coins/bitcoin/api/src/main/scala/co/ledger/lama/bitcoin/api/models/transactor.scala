@@ -1,6 +1,10 @@
 package co.ledger.lama.bitcoin.api.models
 
-import co.ledger.lama.bitcoin.common.models.transactor.{CoinSelectionStrategy, PrepareTxOutput}
+import co.ledger.lama.bitcoin.common.models.transactor.{
+  CoinSelectionStrategy,
+  PrepareTxOutput,
+  RawTransaction
+}
 import co.ledger.lama.common.models.implicits._
 import io.circe.{Decoder, Encoder}
 import io.circe.generic.extras.semiauto._
@@ -19,17 +23,29 @@ object transactor {
       deriveConfiguredDecoder[CreateTransactionRequest]
   }
 
-  case class CreateTransactionDemoRequest(
+  case class BroadcastTransactionRequest(
       coinSelection: CoinSelectionStrategy,
-      outputs: List[PrepareTxOutput],
+      rawTransaction: RawTransaction,
+      signatures: List[Array[Byte]]
+  )
+
+  object BroadcastTransactionRequest {
+    implicit val encoder: Encoder[BroadcastTransactionRequest] =
+      deriveConfiguredEncoder[BroadcastTransactionRequest]
+    implicit val decoder: Decoder[BroadcastTransactionRequest] =
+      deriveConfiguredDecoder[BroadcastTransactionRequest]
+  }
+
+  case class GenerateSignaturesRequest(
+      rawTransaction: RawTransaction,
       privKey: String
   )
 
-  object CreateTransactionDemoRequest {
-    implicit val encoder: Encoder[CreateTransactionDemoRequest] =
-      deriveConfiguredEncoder[CreateTransactionDemoRequest]
-    implicit val decoder: Decoder[CreateTransactionDemoRequest] =
-      deriveConfiguredDecoder[CreateTransactionDemoRequest]
+  object GenerateSignaturesRequest {
+    implicit val encoder: Encoder[GenerateSignaturesRequest] =
+      deriveConfiguredEncoder[GenerateSignaturesRequest]
+    implicit val decoder: Decoder[GenerateSignaturesRequest] =
+      deriveConfiguredDecoder[GenerateSignaturesRequest]
   }
 
 }

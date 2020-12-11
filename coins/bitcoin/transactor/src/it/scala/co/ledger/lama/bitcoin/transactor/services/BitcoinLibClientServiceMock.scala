@@ -4,7 +4,6 @@ import cats.effect.IO
 import co.ledger.lama.bitcoin.common.models.{BitcoinNetwork, interpreter, transactor}
 import co.ledger.lama.bitcoin.transactor.grpc.BitcoinLibGrpcService
 import co.ledger.lama.bitcoin.transactor.models.bitcoinLib
-import com.google.protobuf.ByteString
 
 class BitcoinLibClientServiceMock extends BitcoinLibGrpcService {
 
@@ -22,13 +21,13 @@ class BitcoinLibClientServiceMock extends BitcoinLibGrpcService {
       None
     )
   )
-  override def generateSignatures(
-      rawTransaction: transactor.CreateTransactionResponse,
+  def generateSignatures(
+      rawTransaction: transactor.RawTransaction,
       privkey: String
-  ): IO[Seq[ByteString]] = ???
+  ): IO[List[Array[Byte]]] = ???
 
   override def signTransaction(
-      rawTransaction: transactor.CreateTransactionResponse,
+      rawTransaction: transactor.RawTransaction,
       network: BitcoinNetwork,
       signatures: List[bitcoinLib.SignatureMetadata]
   ): IO[bitcoinLib.RawTransactionResponse] = ???

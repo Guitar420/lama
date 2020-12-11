@@ -5,7 +5,7 @@ import java.util.UUID
 
 import cats.data.NonEmptyList
 import co.ledger.lama.bitcoin.common.models.interpreter.{AccountAddress, ChangeType}
-import co.ledger.lama.bitcoin.common.models.transactor.CoinSelectionStrategy
+import co.ledger.lama.bitcoin.common.models.transactor.{CoinSelectionStrategy, PrepareTxOutput}
 import co.ledger.lama.bitcoin.common.models.worker.{Block, ConfirmedTransaction, Output}
 import co.ledger.lama.bitcoin.common.grpc.mocks.{
   ExplorerClientServiceMock,
@@ -13,10 +13,9 @@ import co.ledger.lama.bitcoin.common.grpc.mocks.{
   KeychainClientServiceMock
 }
 import co.ledger.lama.bitcoin.transactor.services.BitcoinLibClientServiceMock
-import co.ledger.lama.bitcoin.transactor.protobuf.{CreateTransactionRequest, PrepareTxOutput}
+import co.ledger.lama.common.models.Coin
 import co.ledger.lama.common.models.Coin.Btc
-import co.ledger.lama.common.utils.{IOAssertion, UuidUtils}
-import io.grpc.Metadata
+import co.ledger.lama.common.utils.IOAssertion
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 
@@ -82,7 +81,7 @@ class TransactorIT extends AnyFlatSpecLike with Matchers {
     )
 
     val recipients: List[PrepareTxOutput] = List(
-      PrepareTxOutput("recipientAddress", "17000")
+      PrepareTxOutput("recipientAddress", 17000)
     )
 
     for {
@@ -101,14 +100,11 @@ class TransactorIT extends AnyFlatSpecLike with Matchers {
 
       // create a transaction using prevously saved utxoq
       response <- transactor.createTransaction(
-        new CreateTransactionRequest(
-          UuidUtils.uuidToBytes(accountId),
-          UuidUtils.uuidToBytes(UUID.randomUUID()),
-          CoinSelectionStrategy.DepthFirst.toProto,
-          recipients,
-          coinId = Btc.name
-        ),
-        new Metadata
+        accountId,
+        UUID.randomUUID(),
+        recipients,
+        Coin.Btc,
+        CoinSelectionStrategy.DepthFirst
       )
 
     } yield {

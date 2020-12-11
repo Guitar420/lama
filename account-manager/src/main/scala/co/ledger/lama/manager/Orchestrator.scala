@@ -22,8 +22,8 @@ trait Orchestrator {
     Stream
       .emits(tasks)
       .map { task =>
-        val publishPipeline = task.publishEvents(awakeEvery, stopAtNbTick)
-        val reportPipeline  = task.reportEvents
+        val publishPipeline = task.publishWorkerMessages(awakeEvery, stopAtNbTick)
+        val reportPipeline  = task.reportMessages
         val triggerPipeline = task.trigger(awakeEvery)
 
         // Race all inner streams simultaneously.

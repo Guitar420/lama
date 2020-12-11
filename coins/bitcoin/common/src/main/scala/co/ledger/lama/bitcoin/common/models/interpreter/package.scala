@@ -6,7 +6,7 @@ import java.util.UUID
 import cats.data.NonEmptyList
 import cats.implicits._
 import co.ledger.lama.bitcoin.interpreter.protobuf
-import co.ledger.lama.common.utils.{ProtobufUtils, UuidUtils}
+import co.ledger.lama.common.utils.{TimestampProtoUtils, UuidUtils}
 import io.circe.generic.extras.semiauto._
 import io.circe.{Decoder, Encoder}
 import co.ledger.lama.common.models.implicits._
@@ -23,7 +23,7 @@ package object interpreter {
       protobuf.BlockView(
         hash,
         height,
-        Some(ProtobufUtils.fromInstant(time))
+        Some(TimestampProtoUtils.serialize(time))
       )
   }
 
@@ -35,7 +35,7 @@ package object interpreter {
       BlockView(
         proto.hash,
         proto.height,
-        proto.time.map(ProtobufUtils.toInstant).getOrElse(Instant.now)
+        proto.time.map(TimestampProtoUtils.deserialize).getOrElse(Instant.now)
       )
   }
 
@@ -156,7 +156,7 @@ package object interpreter {
         scriptHex,
         changeType.getOrElse(ChangeType.External).toProto,
         derivation.toList,
-        Some(ProtobufUtils.fromInstant(time))
+        Some(TimestampProtoUtils.serialize(time))
       )
   }
 
@@ -173,7 +173,7 @@ package object interpreter {
         proto.scriptHex,
         Some(ChangeType.fromProto(proto.changeType)),
         NonEmptyList.fromListUnsafe(proto.derivation.toList),
-        proto.time.map(ProtobufUtils.toInstant).getOrElse(Instant.now())
+        proto.time.map(TimestampProtoUtils.deserialize).getOrElse(Instant.now())
       )
   }
 
@@ -228,7 +228,7 @@ package object interpreter {
       protobuf.TransactionView(
         id,
         hash,
-        Some(ProtobufUtils.fromInstant(receivedAt)),
+        Some(TimestampProtoUtils.serialize(receivedAt)),
         lockTime,
         fees.toString,
         inputs.map(_.toProto),
@@ -246,7 +246,7 @@ package object interpreter {
       TransactionView(
         proto.id,
         proto.hash,
-        proto.receivedAt.map(ProtobufUtils.toInstant).getOrElse(Instant.now),
+        proto.receivedAt.map(TimestampProtoUtils.deserialize).getOrElse(Instant.now),
         proto.lockTime,
         BigInt(proto.fees),
         proto.inputs.map(InputView.fromProto),
@@ -313,7 +313,7 @@ package object interpreter {
         operationType.toProto,
         value.toString,
         fees.toString,
-        Some(ProtobufUtils.fromInstant(time))
+        Some(TimestampProtoUtils.serialize(time))
       )
     }
   }
@@ -332,7 +332,7 @@ package object interpreter {
         OperationType.fromProto(proto.operationType),
         BigInt(proto.value),
         BigInt(proto.fees),
-        proto.time.map(ProtobufUtils.toInstant).getOrElse(Instant.now)
+        proto.time.map(TimestampProtoUtils.deserialize).getOrElse(Instant.now)
       )
     }
   }
@@ -380,7 +380,7 @@ package object interpreter {
         utxos = utxos,
         received = received.toString,
         sent = sent.toString,
-        time = Some(ProtobufUtils.fromInstant(time))
+        time = Some(TimestampProtoUtils.serialize(time))
       )
   }
 
@@ -394,7 +394,7 @@ package object interpreter {
         utxos = proto.utxos,
         received = BigInt(proto.received),
         sent = BigInt(proto.sent),
-        time = proto.time.map(ProtobufUtils.toInstant).getOrElse(Instant.now)
+        time = proto.time.map(TimestampProtoUtils.deserialize).getOrElse(Instant.now)
       )
   }
 

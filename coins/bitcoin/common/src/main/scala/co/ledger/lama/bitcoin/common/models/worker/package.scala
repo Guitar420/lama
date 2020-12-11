@@ -4,7 +4,7 @@ import java.time.Instant
 
 import co.ledger.lama.common.models.implicits._
 import co.ledger.lama.bitcoin.interpreter.protobuf
-import co.ledger.lama.common.utils.ProtobufUtils
+import co.ledger.lama.common.utils.TimestampProtoUtils
 import io.circe.generic.extras.semiauto._
 import io.circe.syntax.EncoderOps
 import io.circe.{Decoder, Encoder}
@@ -20,7 +20,7 @@ package object worker {
       protobuf.Block(
         hash,
         height,
-        Some(ProtobufUtils.fromInstant(time))
+        Some(TimestampProtoUtils.serialize(time))
       )
   }
 
@@ -32,7 +32,7 @@ package object worker {
       Block(
         proto.hash,
         proto.height,
-        proto.time.map(ProtobufUtils.toInstant).getOrElse(Instant.now)
+        proto.time.map(TimestampProtoUtils.deserialize).getOrElse(Instant.now)
       )
   }
 
@@ -198,7 +198,7 @@ package object worker {
       protobuf.Transaction(
         id,
         hash,
-        Some(ProtobufUtils.fromInstant(receivedAt)),
+        Some(TimestampProtoUtils.serialize(receivedAt)),
         lockTime,
         fees.toString,
         inputs.map(_.toProto),
@@ -219,7 +219,7 @@ package object worker {
       ConfirmedTransaction(
         proto.id,
         proto.hash,
-        proto.receivedAt.map(ProtobufUtils.toInstant).getOrElse(Instant.now),
+        proto.receivedAt.map(TimestampProtoUtils.deserialize).getOrElse(Instant.now),
         proto.lockTime,
         BigInt(proto.fees),
         proto.inputs.map(Input.fromProto),

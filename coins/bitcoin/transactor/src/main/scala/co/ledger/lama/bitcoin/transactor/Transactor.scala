@@ -2,15 +2,14 @@ package co.ledger.lama.bitcoin.transactor
 
 import java.util.UUID
 
-import cats.data.NonEmptyList
-import cats.effect.{ConcurrentEffect, IO}
+import cats.effect.IO
 import co.ledger.lama.bitcoin.common.utils.CoinImplicits._
 import co.ledger.lama.bitcoin.common.models.interpreter.{ChangeType, Utxo}
 import co.ledger.lama.bitcoin.common.models.transactor.{
-  BroadcastTransactionResponse,
+  BroadcastTransaction,
   CoinSelectionStrategy,
-  CreateTransactionResponse,
   PrepareTxOutput,
+  RawTransaction,
   RawTransactionAndUtxos
 }
 import co.ledger.lama.bitcoin.common.grpc.{
@@ -23,43 +22,25 @@ import co.ledger.lama.bitcoin.transactor.models.bitcoinLib.SignatureMetadata
 import co.ledger.lama.bitcoin.transactor.services.CoinSelectionService
 import co.ledger.lama.common.logging.IOLogging
 import co.ledger.lama.common.models.{Coin, Sort}
-import co.ledger.lama.common.utils.UuidUtils
 import fs2.{Chunk, Stream}
 import io.circe.syntax._
-import io.grpc.{Metadata, ServerServiceDefinition}
-
-trait Transactor extends protobuf.BitcoinTransactorServiceFs2Grpc[IO, Metadata] {
-  def definition(implicit ce: ConcurrentEffect[IO]): ServerServiceDefinition =
-    protobuf.BitcoinTransactorServiceFs2Grpc.bindService(this)
-}
 
 class BitcoinLibTransactor(
     bitcoinLibClient: BitcoinLibGrpcService,
     explorerClient: Coin => ExplorerClientService,
     keychainClient: KeychainClientService,
     interpreterClient: InterpreterClientService
-) extends Transactor
-    with IOLogging {
+) extends IOLogging {
 
   def createTransaction(
-      request: protobuf.CreateTransactionRequest,
-      ctx: io.grpc.Metadata
-  ): IO[protobuf.CreateTransactionResponse] =
-    for {
-      coin <- IO.fromOption(Coin.fromKey(request.coinId))(
-        new IllegalArgumentException(
-          s"Unknown coin type ${request.coinId}) in CreateTransactionRequest"
-        )
-      )
+      accountId: UUID,
+      keychainId: UUID,
+      outputs: List[PrepareTxOutput],
+      coin: Coin,
+      coinSelection: CoinSelectionStrategy
+  ): IO[RawTransactionAndUtxos] = {
 
-      accountId <- UuidUtils.bytesToUuidIO(request.accountId)
-      _ <- log.info(
-        s"""Preparing transaction:
-            - accountId: $accountId
-            - strategy: ${request.coinSelection.name}
-            - outputs: ${request.outputs.mkString("[\n", ",\n", "]")}
-         """
-      )
+    for {
 
       utxos <- getUTXOs(accountId, 100, Sort.Ascending).compile.toList
       _ <- log.info(
@@ -78,9 +59,6 @@ class BitcoinLibTransactor(
 
       _ <- log.info(s"GetSmartFees feeLevel: Normal - feeSatPerKb: $estimatedFeeSatPerKb ")
 
-      outputs = request.outputs.map(PrepareTxOutput.fromProto).toList
-
-      keychainId <- UuidUtils.bytesToUuidIO(request.keychainId)
       changeAddress <- keychainClient
         .getFreshAddresses(keychainId, ChangeType.Internal, 1)
         .flatMap { addresses =>
@@ -91,8 +69,8 @@ class BitcoinLibTransactor(
           )
         }
 
-      rawTransaction <- createRawTransaction(
-        CoinSelectionStrategy.fromProto(request.coinSelection),
+      rawTransaction <- createRawTransactionRec(
+        coinSelection,
         utxos,
         outputs,
         changeAddress.accountAddress,
@@ -100,47 +78,23 @@ class BitcoinLibTransactor(
         outputs.map(_.value).sum
       )
 
-    } yield {
-      CreateTransactionResponse(
-        rawTransaction.hex,
-        rawTransaction.hash,
-        rawTransaction.witnessHash,
-        NonEmptyList.fromListUnsafe(rawTransaction.utxos)
-      ).toProto
-    }
+    } yield rawTransaction
+
+  }
+
+  def generateSignatures(rawTransaction: RawTransaction, privKey: String): IO[List[Array[Byte]]] =
+    bitcoinLibClient.generateSignatures(
+      rawTransaction,
+      privKey
+    )
 
   def broadcastTransaction(
-      request: protobuf.BroadcastTransactionRequest,
-      ctx: io.grpc.Metadata
-  ): IO[protobuf.BroadcastTransactionResponse] =
+      rawTransaction: RawTransaction,
+      keychainId: UUID,
+      signatures: List[Array[Byte]],
+      coin: Coin
+  ): IO[BroadcastTransaction] = {
     for {
-      coin <- IO.fromOption(Coin.fromKey(request.coinId))(
-        new IllegalArgumentException(
-          s"Unknown coin type ${request.coinId}) in CreateTransactionRequest"
-        )
-      )
-
-      keychainId <- UuidUtils.bytesToUuidIO(request.keychainId)
-
-      rawTransaction <- IO.fromOption(
-        request.rawTransaction.map(CreateTransactionResponse.fromProto)
-      )(new Exception("Raw Transaction : bad format"))
-
-      _ <- log.info(
-        s"""Transaction to sign:
-            - coin: ${coin.name}
-            - hex: ${rawTransaction.hex}
-            - tx hash: ${rawTransaction.hash}
-         """
-      )
-
-      signatures <- bitcoinLibClient.generateSignatures(
-        rawTransaction,
-        request.privkey
-      )
-
-      _ <- log.info(s"Get ${signatures.size} signatures")
-
       pubKeys <- keychainClient.getAddressesPublicKeys(
         keychainId,
         rawTransaction.utxos.map(_.derivation)
@@ -159,7 +113,6 @@ class BitcoinLibTransactor(
               pubKey
             )
           }
-          .toList
       )
 
       _ <- log.info(
@@ -170,28 +123,29 @@ class BitcoinLibTransactor(
          """
       )
 
-      broadcastedTxHash <- explorerClient(coin).broadcastTransaction(signedRawTx.hex)
+      broadcastTxHash <- explorerClient(coin).broadcastTransaction(signedRawTx.hex)
 
-      _ <- log.info(s"Broadcasted tx hash: $broadcastedTxHash")
+      _ <- log.info(s"Broadcasted tx hash: $broadcastTxHash")
 
       _ <-
-        if (signedRawTx.hash != broadcastedTxHash)
+        if (signedRawTx.hash != broadcastTxHash)
           IO.raiseError(
             new Exception(
-              s"Signed tx hash is not equal to broadcasted tx hash: ${signedRawTx.hash} != $broadcastedTxHash"
+              s"Signed tx hash is not equal to broadcast tx hash: ${signedRawTx.hash} != $broadcastTxHash"
             )
           )
         else IO.unit
 
     } yield {
-      BroadcastTransactionResponse(
+      BroadcastTransaction(
         signedRawTx.hex,
-        broadcastedTxHash,
+        broadcastTxHash,
         signedRawTx.witnessHash
-      ).toProto
+      )
     }
+  }
 
-  private def createRawTransaction(
+  private def createRawTransactionRec(
       strategy: CoinSelectionStrategy,
       utxos: List[Utxo],
       outputs: List[PrepareTxOutput],
@@ -246,7 +200,7 @@ class BitcoinLibTransactor(
           )
         )
       )(notEnoughUtxo =>
-        createRawTransaction(
+        createRawTransactionRec(
           strategy,
           utxos,
           outputs,

@@ -1,9 +1,10 @@
 package co.ledger.lama.bitcoin.worker.services
 
 import cats.effect.IO
+import co.ledger.lama.bitcoin.common.models.worker.Block
 import io.circe.syntax._
 import co.ledger.lama.common.logging.IOLogging
-import co.ledger.lama.common.models.{ReportableEvent, WorkableEvent}
+import co.ledger.lama.common.models.messages.{ReportMessage, WorkerMessage}
 import co.ledger.lama.common.utils.RabbitUtils
 import dev.profunktor.fs2rabbit.interpreter.RabbitClient
 import dev.profunktor.fs2rabbit.model.{ExchangeName, QueueName, RoutingKey}
@@ -16,15 +17,16 @@ class SyncEventService(
     lamaRoutingKey: RoutingKey
 ) extends IOLogging {
 
-  def consumeWorkableEvents: Stream[IO, WorkableEvent] =
-    RabbitUtils.createAutoAckConsumer[WorkableEvent](rabbitClient, workerQueueName)
+  def consumeWorkerMessages: Stream[IO, WorkerMessage[Block]] =
+    RabbitUtils.createAutoAckConsumer[WorkerMessage[Block]](rabbitClient, workerQueueName)
 
-  private val publisher: Stream[IO, ReportableEvent => IO[Unit]] =
-    RabbitUtils.createPublisher[ReportableEvent](rabbitClient, lamaExchangeName, lamaRoutingKey)
+  private val publisher: Stream[IO, ReportMessage[Block] => IO[Unit]] =
+    RabbitUtils
+      .createPublisher[ReportMessage[Block]](rabbitClient, lamaExchangeName, lamaRoutingKey)
 
-  def reportEvent(event: ReportableEvent): IO[Unit] =
+  def reportMessage(message: ReportMessage[Block]): IO[Unit] =
     publisher
-      .evalMap(p => p(event) *> log.info(s"Published event: ${event.asJson.toString}"))
+      .evalMap(p => p(message) *> log.info(s"Published message: ${message.asJson.toString}"))
       .compile
       .drain
 

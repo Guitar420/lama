@@ -16,7 +16,7 @@ import co.ledger.lama.bitcoin.interpreter.services.{
 import co.ledger.lama.common.logging.IOLogging
 import co.ledger.lama.common.models._
 import co.ledger.lama.common.services.NotificationService
-import co.ledger.lama.common.utils.{ProtobufUtils, UuidUtils}
+import co.ledger.lama.common.utils.{TimestampProtoUtils, UuidUtils}
 import doobie.Transactor
 import io.circe.syntax._
 import io.grpc.{Metadata, ServerServiceDefinition}
@@ -208,11 +208,11 @@ class DbInterpreter(
       accountId <- UuidUtils.bytesToUuidIO(request.accountId)
 
       start = request.start
-        .map(ProtobufUtils.toInstant)
+        .map(TimestampProtoUtils.deserialize)
         .getOrElse(Instant.now().minusSeconds(86400))
 
       end = request.end
-        .map(ProtobufUtils.toInstant)
+        .map(TimestampProtoUtils.deserialize)
         .getOrElse(Instant.now().plusSeconds(86400))
 
       _ <- log.info(s"""Getting balances with parameters:

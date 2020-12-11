@@ -7,12 +7,12 @@ import co.ledger.lama.common.models._
 import co.ledger.lama.common.utils.{DbUtils, IOAssertion, PostgresConfig, UuidUtils}
 import co.ledger.lama.manager.Exceptions.AccountNotFoundException
 import co.ledger.lama.manager.config.CoinConfig
-import co.ledger.lama.manager.protobuf.{AccountInfoRequest, BlockHeightState, UpdateAccountRequest}
-import co.ledger.lama.manager.utils.ProtobufUtils
+import co.ledger.lama.manager.protobuf.{AccountInfoRequest, UpdateAccountRequest}
 import co.ledger.lama.manager.{protobuf => pb}
 import com.opentable.db.postgres.embedded.EmbeddedPostgres
 import doobie.hikari.HikariTransactor
 import doobie.util.ExecutionContexts
+import io.circe.JsonObject
 import io.grpc.Metadata
 import org.postgresql.util.PSQLException
 import org.scalatest.BeforeAndAfterAll
@@ -98,7 +98,8 @@ class ServiceSpec extends AnyFlatSpecLike with Matchers with BeforeAndAfterAll {
         event.map(_.accountId) shouldBe Some(accountId)
         event.map(_.syncId) shouldBe Some(syncId)
         event.map(_.status) shouldBe Some(Status.Registered)
-        event.map(_.payload) shouldBe Some(SyncEvent.Payload(accountIdentifier))
+        event.flatMap(_.cursor) shouldBe None
+        event.flatMap(_.error) shouldBe None
       }
     }
   }
@@ -123,24 +124,19 @@ class ServiceSpec extends AnyFlatSpecLike with Matchers with BeforeAndAfterAll {
   it should "not allow the registration of an already existing account" in {
     an[PSQLException] should be thrownBy IOAssertion {
       transactor.use { db =>
-        val service          = new Service(db, conf.coins)
-        val blockHeightValue = 10L
-        val accountInfoWithCursor =
-          registerBitcoinAccount
-            .withSyncFrequency(updatedSyncFrequency)
-            .withBlockHeight(BlockHeightState(blockHeightValue))
+        val service = new Service(db, conf.coins)
 
         service
           .registerAccount(
-            accountInfoWithCursor,
+            registerBitcoinAccount.withSyncFrequency(updatedSyncFrequency),
             new Metadata()
           )
       }
     }
   }
 
-  var unregisteredSyncId: UUID     = _
-  var unregisteredEvent: SyncEvent = _
+  var unregisteredSyncId: UUID                 = _
+  var unregisteredEvent: SyncEvent[JsonObject] = _
 
   lazy val unregisterAccountRequest: pb.UnregisterAccountRequest =
     pb.UnregisterAccountRequest(UuidUtils.uuidToBytes(registeredAccountId))
@@ -166,7 +162,8 @@ class ServiceSpec extends AnyFlatSpecLike with Matchers with BeforeAndAfterAll {
         unregisteredEvent.accountId shouldBe accountId
         unregisteredEvent.syncId shouldBe syncId
         unregisteredEvent.status shouldBe Status.Unregistered
-        unregisteredEvent.payload shouldBe SyncEvent.Payload(accountIdentifier)
+        unregisteredEvent.cursor shouldBe None
+        unregisteredEvent.error shouldBe None
       }
     }
   }
@@ -201,7 +198,7 @@ class ServiceSpec extends AnyFlatSpecLike with Matchers with BeforeAndAfterAll {
           val key          = response.key
           val synFrequency = response.syncFrequency
           val lastSyncEvent =
-            response.lastSyncEvent.flatMap(ProtobufUtils.from(registeredAccountId, _))
+            response.lastSyncEvent.map(SyncEvent.fromProto[JsonObject])
 
           key shouldBe registerBitcoinAccount.key
           synFrequency shouldBe updatedSyncFrequency
@@ -222,16 +219,13 @@ class ServiceSpec extends AnyFlatSpecLike with Matchers with BeforeAndAfterAll {
     }
   }
 
-  private def getLastEvent(service: Service, req: AccountInfoRequest): IO[Option[SyncEvent]] =
+  private def getLastEvent(
+      service: Service,
+      req: AccountInfoRequest
+  ): IO[Option[SyncEvent[JsonObject]]] =
     service
       .getAccountInfo(req, new Metadata())
-      .map { accountInfo =>
-        for {
-          accountId     <- UuidUtils.bytesToUuid(accountInfo.accountId)
-          lastSyncEvent <- accountInfo.lastSyncEvent
-          result        <- ProtobufUtils.from(accountId, lastSyncEvent)
-        } yield result
-      }
+      .map(_.lastSyncEvent.map(SyncEvent.fromProto[JsonObject]))
 
   private val migrateDB: IO[Unit] = DbUtils.flywayMigrate(PostgresConfig(dbUrl, dbUrl, dbPassword))
 

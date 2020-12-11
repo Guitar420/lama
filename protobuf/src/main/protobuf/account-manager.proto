@@ -33,24 +33,16 @@ message RegisterAccountRequest {
     CoinFamily coin_family = 2;
     Coin coin = 3;
     uint64 sync_frequency = 4;
-    oneof cursor {
-        BlockHeightState block_height = 5;
-    }
-    AccountLabel label = 6;
+    AccountLabel label = 5;
 }
 
 message AccountLabel {
     string value = 1;
 }
 
-
 message UpdateAccountRequest {
     bytes account_id = 1;
     uint64 sync_frequency = 2;
-}
-
-message BlockHeightState {
-    uint64 state = 1;
 }
 
 message UnregisterAccountRequest {
@@ -98,8 +90,9 @@ message SyncEvent {
     bytes account_id = 1;
     bytes sync_id = 2;
     string status = 3;
-    bytes payload = 4;
-    google.protobuf.Timestamp time = 5;
+    bytes cursor = 4;
+    bytes error = 5;
+    google.protobuf.Timestamp time = 6;
 }
 
 enum SortingOrder {

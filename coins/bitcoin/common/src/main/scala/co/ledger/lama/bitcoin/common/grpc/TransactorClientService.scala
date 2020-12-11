@@ -4,14 +4,15 @@ import java.util.UUID
 
 import cats.effect.IO
 import co.ledger.lama.bitcoin.common.models.transactor.{
-  BroadcastTransactionResponse,
+  BroadcastTransaction,
   CoinSelectionStrategy,
-  CreateTransactionResponse,
-  PrepareTxOutput
+  PrepareTxOutput,
+  RawTransaction
 }
 import co.ledger.lama.bitcoin.transactor.protobuf
 import co.ledger.lama.common.models.Coin
 import co.ledger.lama.common.utils.UuidUtils
+import com.google.protobuf.ByteString
 import io.grpc.Metadata
 
 trait TransactorClientService {
@@ -22,15 +23,19 @@ trait TransactorClientService {
       coinSelection: CoinSelectionStrategy,
       outputs: List[PrepareTxOutput],
       coin: Coin
-  ): IO[CreateTransactionResponse]
+  ): IO[RawTransaction]
+
+  def generateSignature(
+      rawTransaction: RawTransaction,
+      privKey: String
+  ): IO[List[Array[Byte]]]
 
   def broadcastTransaction(
-      accountId: UUID,
       keychainId: UUID,
       coinId: String,
-      rawTransaction: CreateTransactionResponse,
-      privKey: String
-  ): IO[BroadcastTransactionResponse]
+      rawTransaction: RawTransaction,
+      signatures: List[Array[Byte]]
+  ): IO[BroadcastTransaction]
 }
 
 class TransactorGrpcClientService(
@@ -43,7 +48,7 @@ class TransactorGrpcClientService(
       coinSelection: CoinSelectionStrategy,
       outputs: List[PrepareTxOutput],
       coin: Coin
-  ): IO[CreateTransactionResponse] =
+  ): IO[RawTransaction] =
     grpcClient
       .createTransaction(
         new protobuf.CreateTransactionRequest(
@@ -55,26 +60,37 @@ class TransactorGrpcClientService(
         ),
         new Metadata
       )
-      .map(CreateTransactionResponse.fromProto)
+      .map(RawTransaction.fromProto)
 
-  def broadcastTransaction(
-      accountId: UUID,
-      keychainId: UUID,
-      coinId: String,
-      rawTransaction: CreateTransactionResponse,
-      privKey: String
-  ): IO[BroadcastTransactionResponse] = {
+  def generateSignature(rawTransaction: RawTransaction, privKey: String): IO[List[Array[Byte]]] =
     grpcClient
-      .broadcastTransaction(
-        protobuf.BroadcastTransactionRequest(
-          UuidUtils.uuidToBytes(accountId),
-          UuidUtils.uuidToBytes(keychainId),
-          coinId,
+      .generateSignatures(
+        protobuf.GenerateSignaturesRequest(
           Some(rawTransaction.toProto),
-          privKey: String
+          privKey
         ),
         new Metadata
       )
-      .map(BroadcastTransactionResponse.fromProto)
+      .map(
+        _.signatures.map(_.toByteArray).toList
+      )
+
+  def broadcastTransaction(
+      keychainId: UUID,
+      coinId: String,
+      rawTransaction: RawTransaction,
+      signatures: List[Array[Byte]]
+  ): IO[BroadcastTransaction] = {
+    grpcClient
+      .broadcastTransaction(
+        protobuf.BroadcastTransactionRequest(
+          UuidUtils.uuidToBytes(keychainId),
+          coinId,
+          Some(rawTransaction.toProto),
+          signatures.map(signature => ByteString.copyFrom(signature))
+        ),
+        new Metadata
+      )
+      .map(BroadcastTransaction.fromProto)
   }
 }

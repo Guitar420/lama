@@ -15,6 +15,7 @@ import co.ledger.lama.manager.protobuf.AccountManagerServiceFs2Grpc
 import Config.Config
 import co.ledger.lama.bitcoin.api.routes.{AccountController, HealthController, VersionController}
 import co.ledger.lama.bitcoin.transactor.protobuf.BitcoinTransactorServiceFs2Grpc
+import co.ledger.lama.common.grpc.AccountManagerGrpcClientService
 import co.ledger.protobuf.bitcoin.keychain.KeychainServiceFs2Grpc
 import co.ledger.protobuf.lama.common.HealthFs2Grpc
 import dev.profunktor.fs2rabbit.interpreter.RabbitClient
@@ -37,6 +38,7 @@ object App extends IOApp {
       grpcBitcoinTransactorHealthClient: HealthFs2Grpc[IO, Metadata],
       grpcAccountClient: AccountManagerServiceFs2Grpc[IO, Metadata],
       grpcKeychainClient: KeychainServiceFs2Grpc[IO, Metadata],
+      grpcKeychainHealthClient: HealthFs2Grpc[IO, Metadata],
       grpcBitcoinInterpreterClient: BitcoinInterpreterServiceFs2Grpc[IO, Metadata],
       grpcBitcoinTransactorClient: BitcoinTransactorServiceFs2Grpc[IO, Metadata]
   )
@@ -57,6 +59,9 @@ object App extends IOApp {
       grpcKeychainClient <-
         grpcManagedChannel(conf.bitcoin.keychain).map(KeychainServiceFs2Grpc.stub[IO](_))
 
+      grpcKeychainHealthClient <- grpcManagedChannel(conf.bitcoin.keychain)
+        .map(HealthFs2Grpc.stub[IO](_))
+
       grpcBitcoinInterpreterClient <- grpcManagedChannel(conf.bitcoin.interpreter)
         .map(BitcoinInterpreterServiceFs2Grpc.stub[IO](_))
 
@@ -76,6 +81,7 @@ object App extends IOApp {
       grpcBitcoinTransactorHealthClient = grpcBitcoinTransactorHealthClient,
       grpcAccountClient = grpcAccountManagerClient,
       grpcKeychainClient = grpcKeychainClient,
+      grpcKeychainHealthClient = grpcKeychainHealthClient,
       grpcBitcoinInterpreterClient = grpcBitcoinInterpreterClient,
       grpcBitcoinTransactorClient = grpcBitcoinTransactorClient
     )
@@ -100,7 +106,7 @@ object App extends IOApp {
             AccountController.routes(
               notificationService,
               new KeychainGrpcClientService(serviceResources.grpcKeychainClient),
-              serviceResources.grpcAccountClient,
+              new AccountManagerGrpcClientService(serviceResources.grpcAccountClient),
               new InterpreterGrpcClientService(serviceResources.grpcBitcoinInterpreterClient),
               new TransactorGrpcClientService(serviceResources.grpcBitcoinTransactorClient)
             )
@@ -111,7 +117,8 @@ object App extends IOApp {
           HealthController.routes(
             serviceResources.grpcAccountManagerHealthClient,
             serviceResources.grpcBitcoinInterpreterHealthClient,
-            serviceResources.grpcBitcoinTransactorHealthClient
+            serviceResources.grpcBitcoinTransactorHealthClient,
+            serviceResources.grpcKeychainHealthClient
           ),
           methodConfig
         ),

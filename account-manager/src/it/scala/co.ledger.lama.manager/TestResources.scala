@@ -63,8 +63,8 @@ trait TestResources {
     redis.use { client =>
       IO(
         client.del(
-          Publisher.onGoingEventsCounterKey(accountTest.id),
-          Publisher.pendingEventsKey(accountTest.id)
+          Publisher.onGoingMessagesCounterKey(accountTest.id),
+          Publisher.pendingMessagesKey(accountTest.id)
         )
       ).void
     }

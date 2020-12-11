@@ -36,7 +36,7 @@ package object transactor {
       }
   }
 
-  case class CreateTransactionResponse(
+  case class RawTransaction(
       hex: String,
       hash: String,
       witnessHash: String,
@@ -51,14 +51,14 @@ package object transactor {
       )
   }
 
-  object CreateTransactionResponse {
-    implicit val encoder: Encoder[CreateTransactionResponse] =
-      deriveConfiguredEncoder[CreateTransactionResponse]
-    implicit val decoder: Decoder[CreateTransactionResponse] =
-      deriveConfiguredDecoder[CreateTransactionResponse]
+  object RawTransaction {
+    implicit val encoder: Encoder[RawTransaction] =
+      deriveConfiguredEncoder[RawTransaction]
+    implicit val decoder: Decoder[RawTransaction] =
+      deriveConfiguredDecoder[RawTransaction]
 
-    def fromProto(proto: protobuf.CreateTransactionResponse): CreateTransactionResponse =
-      CreateTransactionResponse(
+    def fromProto(proto: protobuf.CreateTransactionResponse): RawTransaction =
+      RawTransaction(
         proto.hex,
         proto.hash,
         proto.witnessHash,
@@ -66,7 +66,7 @@ package object transactor {
       )
   }
 
-  case class BroadcastTransactionResponse(
+  case class BroadcastTransaction(
       hex: String,
       hash: String,
       witnessHash: String
@@ -79,14 +79,14 @@ package object transactor {
       )
   }
 
-  object BroadcastTransactionResponse {
-    implicit val encoder: Encoder[BroadcastTransactionResponse] =
-      deriveConfiguredEncoder[BroadcastTransactionResponse]
-    implicit val decoder: Decoder[BroadcastTransactionResponse] =
-      deriveConfiguredDecoder[BroadcastTransactionResponse]
+  object BroadcastTransaction {
+    implicit val encoder: Encoder[BroadcastTransaction] =
+      deriveConfiguredEncoder[BroadcastTransaction]
+    implicit val decoder: Decoder[BroadcastTransaction] =
+      deriveConfiguredDecoder[BroadcastTransaction]
 
-    def fromProto(proto: protobuf.BroadcastTransactionResponse): BroadcastTransactionResponse =
-      BroadcastTransactionResponse(
+    def fromProto(proto: protobuf.BroadcastTransactionResponse): BroadcastTransaction =
+      BroadcastTransaction(
         proto.hex,
         proto.hash,
         proto.witnessHash

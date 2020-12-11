@@ -7,17 +7,6 @@ import co.ledger.lama.bitcoin.api.models.transactor._
 import co.ledger.lama.common.logging.IOLogging
 import co.ledger.lama.common.services.NotificationService
 import co.ledger.lama.common.utils.UuidUtils
-import co.ledger.lama.common.utils.{ProtobufUtils => CommonProtobufUtils}
-import co.ledger.lama.manager.protobuf.{
-  AccountInfoRequest,
-  AccountLabel,
-  AccountManagerServiceFs2Grpc,
-  GetAccountsRequest,
-  RegisterAccountRequest,
-  UnregisterAccountRequest,
-  UpdateAccountRequest
-}
-import co.ledger.lama.bitcoin.api.utils.ProtobufUtils._
 import co.ledger.lama.bitcoin.api.utils.RouterUtils._
 import co.ledger.lama.bitcoin.common.models.interpreter.ChangeType
 import co.ledger.lama.bitcoin.common.grpc.{
@@ -25,9 +14,9 @@ import co.ledger.lama.bitcoin.common.grpc.{
   KeychainClientService,
   TransactorClientService
 }
+import co.ledger.lama.common.grpc.AccountManagerClientService
 import io.circe.Json
 import io.circe.generic.extras.auto._
-import io.grpc.Metadata
 import org.http4s.HttpRoutes
 import org.http4s.circe.CirceEntityCodec._
 import org.http4s.dsl.Http4sDsl
@@ -37,40 +26,44 @@ object AccountController extends Http4sDsl[IO] with IOLogging {
 
   implicit val cs: ContextShift[IO] = IO.contextShift(scala.concurrent.ExecutionContext.global)
 
-  // TODO: refacto with accountManagerService
   def routes(
       notificationService: NotificationService,
       keychainClient: KeychainClientService,
-      accountManagerClient: AccountManagerServiceFs2Grpc[IO, Metadata],
+      accountManagerClient: AccountManagerClientService,
       interpreterClient: InterpreterClientService,
       transactorClient: TransactorClientService
   ): HttpRoutes[IO] =
     HttpRoutes.of[IO] {
+
       case GET -> Root
           :? OptionalLimitQueryParamMatcher(limit)
           +& OptionalOffsetQueryParamMatcher(offset) =>
         val t = for {
-          accountsResult <- accountManagerClient.getAccounts(
-            GetAccountsRequest(limit.getOrElse(0), offset.getOrElse(0)),
-            new Metadata
-          )
 
-          accounts = accountsResult.accounts.toList
+          // Get Account Info
+          accountsResult <- accountManagerClient.getAccounts(limit, offset)
+          accountsWithIds = accountsResult.accounts.map(account => account.id -> account)
 
-          accountsWithIds <- accounts
-            .parTraverse(account =>
-              UuidUtils.bytesToUuidIO(account.accountId).map(accountId => accountId -> account)
-            )
-
+          // Get Balance
           accountsWithBalances <- accountsWithIds.parTraverse { case (accountId, account) =>
             interpreterClient.getBalance(accountId).map(balance => account -> balance)
           }
-
         } yield (accountsWithBalances, accountsResult.total)
 
         t.flatMap { case (accountsWithBalances, total) =>
           val accountsInfos = accountsWithBalances.map { case (account, balance) =>
-            fromAccountInfo(account, balance)
+            AccountWithBalance(
+              account.id,
+              account.coinFamily,
+              account.coin,
+              account.syncFrequency,
+              account.lastSyncEvent,
+              balance.balance,
+              balance.utxos,
+              balance.received,
+              balance.sent,
+              account.label
+            )
           }
 
           Ok(
@@ -83,10 +76,23 @@ object AccountController extends Http4sDsl[IO] with IOLogging {
 
       case GET -> Root / UUIDVar(accountId) =>
         accountManagerClient
-          .getAccountInfo(toAccountInfoRequest(accountId), new Metadata)
+          .getAccountInfo(accountId)
           .parProduct(interpreterClient.getBalance(accountId))
-          .flatMap { case (info, balance) =>
-            Ok(fromAccountInfo(info, balance))
+          .flatMap { case (account, balance) =>
+            Ok(
+              AccountWithBalance(
+                account.id,
+                account.coinFamily,
+                account.coin,
+                account.syncFrequency,
+                account.lastSyncEvent,
+                balance.balance,
+                balance.utxos,
+                balance.received,
+                balance.sent,
+                account.label
+              )
+            )
           }
 
       case GET -> Root / UUIDVar(accountId) / "events"
@@ -94,18 +100,8 @@ object AccountController extends Http4sDsl[IO] with IOLogging {
           +& OptionalOffsetQueryParamMatcher(offset)
           +& OptionalSortQueryParamMatcher(sort) =>
         accountManagerClient
-          .getSyncEvents(toGetSyncEventsRequest(accountId, limit, offset, sort), new Metadata)
-          .flatMap { res =>
-            Ok(
-              Json.obj(
-                "events" ->
-                  Json.fromValues(
-                    res.syncEvents.map(se => CommonProtobufUtils.fromSyncEvent(se).asJson)
-                  ),
-                "total" -> Json.fromInt(res.total)
-              )
-            )
-          }
+          .getSyncEvents(accountId, limit, offset, sort)
+          .flatMap(Ok(_))
 
       case req @ POST -> Root =>
         val ra = for {
@@ -121,18 +117,13 @@ object AccountController extends Http4sDsl[IO] with IOLogging {
           _ <- log.info(s"Keychain created with id: ${createdKeychain.keychainId}")
           _ <- log.info("Registering account")
 
-          registeredAccount <- accountManagerClient.registerAccount(
-            new RegisterAccountRequest(
-              key = createdKeychain.keychainId.toString,
-              coinFamily = CommonProtobufUtils.toCoinFamily(creationRequest.coinFamily),
-              coin = CommonProtobufUtils.toCoin(creationRequest.coin),
-              syncFrequency = creationRequest.syncFrequency.getOrElse(0L),
-              label = creationRequest.label.map(AccountLabel(_))
-            ),
-            new Metadata
+          account <- accountManagerClient.registerAccount(
+            createdKeychain.keychainId,
+            creationRequest.coinFamily,
+            creationRequest.coin,
+            creationRequest.syncFrequency,
+            creationRequest.label
           )
-
-          account = fromRegisterAccount(registeredAccount)
 
           // This creates a new queue for this account notifications
           _ <- notificationService.createQueue(
@@ -157,31 +148,22 @@ object AccountController extends Http4sDsl[IO] with IOLogging {
           )
 
           _ <- accountManagerClient.updateAccount(
-            new UpdateAccountRequest(
-              accountId = UuidUtils.uuidToBytes(accountId),
-              syncFrequency = updateRequest.syncFrequency
-            ),
-            new Metadata
+            accountId,
+            updateRequest.syncFrequency
           )
+
         } yield updateRequest.syncFrequency
         r.flatMap(_ => Ok())
 
       case DELETE -> Root / UUIDVar(accountId) =>
         log.info(s"Fetching account informations for id: $accountId")
         val r = for {
-          _ <- log.info(s"Fetching account informations for id: $accountId")
 
-          account <- accountManagerClient.getAccountInfo(
-            new AccountInfoRequest(UuidUtils.uuidToBytes(accountId)),
-            new Metadata
-          )
+          _       <- log.info(s"Fetching account informations for id: $accountId")
+          account <- accountManagerClient.getAccountInfo(accountId)
 
-          accountId <- UuidUtils.bytesToUuidIO(account.accountId)
-
-          _ <- log.info("Deleting keychain")
-
+          _          <- log.info("Deleting keychain")
           keychainId <- UuidUtils.stringToUuidIO(account.key)
-
           _ <- keychainClient
             .deleteKeychain(keychainId)
             .map(_ => log.info("Keychain deleted"))
@@ -190,20 +172,14 @@ object AccountController extends Http4sDsl[IO] with IOLogging {
             )
 
           _ <- log.info("Unregistering account")
-
-          _ <- accountManagerClient.unregisterAccount(
-            new UnregisterAccountRequest(
-              UuidUtils.uuidToBytes(accountId)
-            ),
-            new Metadata
-          )
+          _ <- accountManagerClient.unregisterAccount(account.id)
           _ <- log.info("Account unregistered")
-          _ <- log.info("Deleting queue")
 
+          _ <- log.info("Deleting queue")
           _ <- notificationService.deleteQueue(
-            accountId = accountId,
-            coinFamily = CommonProtobufUtils.fromCoinFamily(account.coinFamily),
-            coin = CommonProtobufUtils.fromCoin(account.coin)
+            accountId,
+            account.coinFamily,
+            account.coin
           )
           _ <- log.info("Queue deleted")
 
@@ -271,11 +247,7 @@ object AccountController extends Http4sDsl[IO] with IOLogging {
           _                        <- log.info(s"Preparing transaction creation for account: $accountId")
           createTransactionRequest <- req.as[CreateTransactionRequest]
 
-          account <- accountManagerClient.getAccountInfo(
-            new AccountInfoRequest(UuidUtils.uuidToBytes(accountId)),
-            new Metadata
-          )
-
+          account    <- accountManagerClient.getAccountInfo(accountId)
           keychainId <- UuidUtils.stringToUuidIO(account.key)
 
           response <- transactorClient
@@ -284,7 +256,21 @@ object AccountController extends Http4sDsl[IO] with IOLogging {
               keychainId,
               createTransactionRequest.coinSelection,
               createTransactionRequest.outputs,
-              CommonProtobufUtils.fromCoin(account.coin)
+              account.coin
+            )
+            .flatMap(Ok(_))
+
+        } yield response
+
+      case req @ POST -> Root / "_internal" / "sign" =>
+        for {
+          _       <- log.info(s"Signing Transaction")
+          request <- req.as[GenerateSignaturesRequest]
+
+          response <- transactorClient
+            .generateSignature(
+              request.rawTransaction,
+              request.privKey
             )
             .flatMap(Ok(_))
 
@@ -292,34 +278,20 @@ object AccountController extends Http4sDsl[IO] with IOLogging {
 
       case req @ POST -> Root / UUIDVar(
             accountId
-          ) / "transactions" / "demo" =>
+          ) / "transactions" / "send" =>
         for {
           _       <- log.info(s"Preparing transaction creation for account: $accountId")
-          request <- req.as[CreateTransactionDemoRequest]
+          request <- req.as[BroadcastTransactionRequest]
 
-          account <- accountManagerClient.getAccountInfo(
-            new AccountInfoRequest(UuidUtils.uuidToBytes(accountId)),
-            new Metadata
-          )
-
+          account    <- accountManagerClient.getAccountInfo(accountId)
           keychainId <- UuidUtils.stringToUuidIO(account.key)
-
-          rawTransaction <- transactorClient
-            .createTransaction(
-              accountId,
-              keychainId,
-              request.coinSelection,
-              request.outputs,
-              CommonProtobufUtils.fromCoin(account.coin)
-            )
 
           response <- transactorClient
             .broadcastTransaction(
-              accountId,
               keychainId,
               account.coin.name,
-              rawTransaction,
-              request.privKey
+              request.rawTransaction,
+              request.signatures
             )
             .flatMap(Ok(_))
 
@@ -331,11 +303,7 @@ object AccountController extends Http4sDsl[IO] with IOLogging {
           +& OptionalToIndexQueryParamMatcher(to)
           +& OptionalChangeTypeParamMatcher(change) =>
         for {
-          account <- accountManagerClient.getAccountInfo(
-            new AccountInfoRequest(UuidUtils.uuidToBytes(accountId)),
-            new Metadata
-          )
-
+          account    <- accountManagerClient.getAccountInfo(accountId)
           keychainId <- UuidUtils.stringToUuidIO(account.key)
 
           response <- keychainClient
@@ -352,23 +320,16 @@ object AccountController extends Http4sDsl[IO] with IOLogging {
       case GET -> Root / UUIDVar(
             accountId
           ) / "addresses" / "fresh" :? OptionalChangeTypeParamMatcher(change) =>
-        // TODO: refactor when moving keychainService into bitcoin.common
         for {
-          account <- accountManagerClient.getAccountInfo(
-            new AccountInfoRequest(UuidUtils.uuidToBytes(accountId)),
-            new Metadata
-          )
-
-          keychainId <- UuidUtils.stringToUuidIO(account.key)
-
-          keychainInfo <- keychainClient
-            .getKeychainInfo(keychainId)
+          account      <- accountManagerClient.getAccountInfo(accountId)
+          keychainId   <- UuidUtils.stringToUuidIO(account.key)
+          keychainInfo <- keychainClient.getKeychainInfo(keychainId)
 
           response <- keychainClient
             .getFreshAddresses(
-              keychainId = keychainId,
-              change = change.getOrElse(ChangeType.External),
-              size = keychainInfo.lookaheadSize
+              keychainId,
+              change.getOrElse(ChangeType.External),
+              keychainInfo.lookaheadSize
             )
             .flatMap(Ok(_))
 

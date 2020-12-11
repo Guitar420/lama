@@ -10,7 +10,7 @@ import co.ledger.lama.bitcoin.common.models.interpreter.grpc._
 import co.ledger.lama.bitcoin.common.utils.BtcProtoUtils._
 import co.ledger.lama.bitcoin.interpreter.protobuf
 import co.ledger.lama.common.models.{Coin, Sort}
-import co.ledger.lama.common.utils.{ProtobufUtils, UuidUtils}
+import co.ledger.lama.common.utils.{TimestampProtoUtils, UuidUtils}
 import io.grpc.Metadata
 
 trait InterpreterClientService {
@@ -161,8 +161,8 @@ class InterpreterGrpcClientService(
       .getBalanceHistory(
         protobuf.GetBalanceHistoryRequest(
           accountId = UuidUtils.uuidToBytes(accountId),
-          start.map(ProtobufUtils.fromInstant),
-          end.map(ProtobufUtils.fromInstant)
+          start.map(TimestampProtoUtils.serialize),
+          end.map(TimestampProtoUtils.serialize)
         ),
         new Metadata
       )

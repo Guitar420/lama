@@ -6,11 +6,12 @@ import java.util.UUID
 
 import cats.implicits._
 import co.ledger.lama.common.models._
+import co.ledger.lama.common.models.messages.WorkerMessage
 import doobie.util.meta.Meta
 import doobie.postgres.implicits._
-import doobie.util.{Get, Put, Read}
 import doobie.implicits.javasql._
-import io.circe.{Decoder, Encoder, Json}
+import doobie.util.{Get, Put, Read}
+import io.circe.{Decoder, Encoder, Json, JsonObject}
 import io.circe.parser._
 import io.circe.syntax._
 import org.postgresql.util.PGobject
@@ -35,10 +36,11 @@ object implicits {
         o
       })
 
-  implicit lazy val read: Read[SyncEvent] = Read[(UUID, UUID, Status, Json, Instant)].map {
-    case (accountId, syncId, status, json, updated) =>
-      SyncEvent(accountId, syncId, status, json.as[SyncEvent.Payload].toTry.get, updated)
-  }
+  implicit val jsonObjectGet: Get[Option[JsonObject]] =
+    jsonMeta.get.map(_.asObject)
+
+  implicit val jsonObjectPut: Put[Option[JsonObject]] =
+    jsonMeta.put.contramap(_.map(Json.fromJsonObject).getOrElse(Json.Null))
 
   implicit val meta: Meta[Status] =
     pgEnumStringOpt("sync_status", Status.fromKey, _.name)
@@ -61,10 +63,72 @@ object implicits {
   implicit val coinFamilyMeta: Meta[CoinFamily] =
     pgEnumStringOpt("coin_family", CoinFamily.fromKey, _.name)
 
-  implicit val syncPayloadGet: Get[SyncEvent.Payload] =
-    jsonMeta.get.temap(_.as[SyncEvent.Payload].left.map(_.message))
+  implicit lazy val syncEventRead: Read[SyncEvent[JsonObject]] =
+    Read[
+      (UUID, UUID, Status, Option[JsonObject], Option[JsonObject], Instant)
+    ].map { case (accountId, syncId, status, cursor, error, updated) =>
+      SyncEvent(
+        accountId,
+        syncId,
+        status,
+        cursor,
+        error.flatMap(_.asJson.as[ReportError].toOption),
+        updated
+      )
+    }
 
-  implicit val syncPayloadPut: Put[SyncEvent.Payload] =
-    jsonMeta.put.contramap[SyncEvent.Payload](_.asJson)
+  implicit lazy val triggerableEventRead: Read[TriggerableEvent[JsonObject]] =
+    Read[
+      (UUID, UUID, TriggerableStatus, Option[JsonObject], Option[JsonObject], Instant)
+    ].map { case (accountId, syncId, status, cursor, error, updated) =>
+      TriggerableEvent(
+        accountId,
+        syncId,
+        status,
+        cursor,
+        error.flatMap(_.asJson.as[ReportError].toOption),
+        updated
+      )
+    }
 
+  implicit lazy val workerMessageRead: Read[WorkerMessage[JsonObject]] =
+    Read[
+      (
+          String,
+          CoinFamily,
+          Coin,
+          UUID,
+          UUID,
+          WorkableStatus,
+          Option[JsonObject],
+          Option[JsonObject],
+          Instant
+      )
+    ].map { case (key, coinFamily, coin, accountId, syncId, status, cursor, error, updated) =>
+      WorkerMessage(
+        account = AccountIdentifier(key, coinFamily, coin),
+        event = WorkableEvent(
+          accountId,
+          syncId,
+          status,
+          cursor,
+          error.flatMap(_.asJson.as[ReportError].toOption),
+          updated
+        )
+      )
+    }
+
+  implicit val accountInfoRead: Read[AccountInfo] =
+    Read[(UUID, String, CoinFamily, Coin, Long, Option[String])].map {
+      case (accountId, key, coinFamily, coin, syncFrequency, label) =>
+        AccountInfo(
+          accountId,
+          key,
+          coinFamily,
+          coin,
+          syncFrequency,
+          None,
+          label
+        )
+    }
 }

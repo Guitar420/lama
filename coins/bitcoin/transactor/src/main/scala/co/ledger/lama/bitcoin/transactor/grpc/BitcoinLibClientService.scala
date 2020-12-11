@@ -3,12 +3,11 @@ package co.ledger.lama.bitcoin.transactor.grpc
 import cats.effect.IO
 import co.ledger.lama.bitcoin.common.models.BitcoinNetwork
 import co.ledger.lama.bitcoin.common.models.interpreter.Utxo
-import co.ledger.lama.bitcoin.common.models.transactor.{CreateTransactionResponse, PrepareTxOutput}
+import co.ledger.lama.bitcoin.common.models.transactor.{RawTransaction, PrepareTxOutput}
 import co.ledger.lama.bitcoin.transactor.models.bitcoinLib._
 import co.ledger.lama.bitcoin.transactor.models.implicits._
 import co.ledger.lama.common.logging.IOLogging
 import co.ledger.protobuf.bitcoin.libgrpc
-import com.google.protobuf.ByteString
 import io.grpc.Metadata
 
 trait BitcoinLibGrpcService {
@@ -21,12 +20,12 @@ trait BitcoinLibGrpcService {
   ): IO[RawTransactionResponse]
 
   def generateSignatures(
-      rawTransaction: CreateTransactionResponse,
+      rawTransaction: RawTransaction,
       privkey: String
-  ): IO[Seq[ByteString]]
+  ): IO[List[Array[Byte]]]
 
   def signTransaction(
-      rawTransaction: CreateTransactionResponse,
+      rawTransaction: RawTransaction,
       network: BitcoinNetwork,
       signatures: List[SignatureMetadata]
   ): IO[RawTransactionResponse]
@@ -63,9 +62,9 @@ class BitcoinLibGrpcClientService(grpcClient: libgrpc.CoinServiceFs2Grpc[IO, Met
       .map(RawTransactionResponse.fromProto)
 
   def generateSignatures(
-      rawTransaction: CreateTransactionResponse,
+      rawTransaction: RawTransaction,
       privkey: String
-  ): IO[Seq[ByteString]] =
+  ): IO[List[Array[Byte]]] =
     grpcClient
       .generateDerSignatures(
         libgrpc.GenerateDerSignaturesRequest(
@@ -90,10 +89,10 @@ class BitcoinLibGrpcClientService(grpcClient: libgrpc.CoinServiceFs2Grpc[IO, Met
         ),
         new Metadata
       )
-      .map(_.derSignatures)
+      .map(_.derSignatures.map(_.toByteArray).toList)
 
   def signTransaction(
-      rawTransaction: CreateTransactionResponse,
+      rawTransaction: RawTransaction,
       network: BitcoinNetwork,
       signatures: List[SignatureMetadata]
   ): IO[RawTransactionResponse] =

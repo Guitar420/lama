@@ -11,23 +11,14 @@ import co.ledger.lama.bitcoin.common.grpc.mocks.{
 }
 import co.ledger.lama.bitcoin.common.grpc.ExplorerV3ClientService
 import co.ledger.lama.bitcoin.worker.config.Config
-import co.ledger.lama.bitcoin.worker.models.PayloadData
 import co.ledger.lama.bitcoin.worker.services.{CursorStateService, SyncEventService}
-import co.ledger.lama.common.models.{
-  AccountIdentifier,
-  Coin,
-  CoinFamily,
-  ReportableEvent,
-  Status,
-  SyncEvent,
-  WorkableEvent
-}
+import co.ledger.lama.common.models.messages.{ReportMessage, WorkerMessage}
+import co.ledger.lama.common.models.{AccountIdentifier, Coin, CoinFamily, Status, WorkableEvent}
 import co.ledger.lama.common.services.Clients
 import co.ledger.lama.common.utils.{IOAssertion, RabbitUtils}
 import dev.profunktor.fs2rabbit.interpreter.RabbitClient
 import dev.profunktor.fs2rabbit.model.{ExchangeName, ExchangeType, QueueName, RoutingKey}
 import fs2.Stream
-import io.circe.syntax._
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 import pureconfig.ConfigSource
@@ -90,25 +81,29 @@ class WorkerIT extends AnyFlatSpecLike with Matchers {
 
           val syncId = UUID.randomUUID()
 
-          val registeredEvent =
-            WorkableEvent(
-              account.id,
-              syncId,
-              Status.Registered,
-              SyncEvent.Payload(account),
-              Instant.now()
+          val registeredMessage =
+            WorkerMessage[Block](
+              account = account,
+              event = WorkableEvent(
+                account.id,
+                syncId,
+                Status.Registered,
+                None,
+                None,
+                Instant.now()
+              )
             )
 
           Stream
             .eval {
-              accountManager.publishWorkableEvent(registeredEvent) *>
-                accountManager.consumeReportableEvent
+              accountManager.publishWorkerMessage(registeredMessage) *>
+                accountManager.consumeReportMessage
             }
             .concurrently(worker.run)
             .take(1)
             .compile
             .last
-            .map { reportableEvent =>
+            .map { reportMessage =>
               it should "have 35 used addresses for the account" in {
                 keychainClient.usedAddresses.size shouldBe 35
               }
@@ -124,20 +119,21 @@ class WorkerIT extends AnyFlatSpecLike with Matchers {
                   )
                   .distinctBy(_.hash) should have size expectedTxsSize
 
-                reportableEvent shouldBe Some(
-                  registeredEvent
-                    .reportSuccess(
-                      PayloadData(
-                        lastBlock = Some(
+                reportMessage shouldBe Some(
+                  ReportMessage(
+                    account = account,
+                    event = registeredMessage.event
+                      .asReportableSuccessEvent(
+                        Some(
                           Block(
                             "0000000000000000000c44bf26af3b5b3c97e5aed67407fd551a90bc175de5a0",
                             expectedLastBlockHeight,
                             Instant.parse("2020-08-20T13:01:16Z")
                           )
                         )
-                      ).asJson
-                    )
-                    .copy(time = reportableEvent.map(_.time).getOrElse(Instant.now()))
+                      )
+                      .copy(time = reportMessage.map(_.event.time).getOrElse(Instant.now()))
+                  )
                 )
               }
             }
@@ -192,16 +188,16 @@ class SimpleAccountManager(
     routingKey: RoutingKey
 ) {
 
-  private lazy val consumer: Stream[IO, ReportableEvent] =
-    RabbitUtils.createAutoAckConsumer[ReportableEvent](rabbit, lamaEventsQueueName)
+  private lazy val consumer: Stream[IO, ReportMessage[Block]] =
+    RabbitUtils.createAutoAckConsumer[ReportMessage[Block]](rabbit, lamaEventsQueueName)
 
-  private lazy val publisher: Stream[IO, WorkableEvent => IO[Unit]] =
-    RabbitUtils.createPublisher[WorkableEvent](rabbit, workerEventsExchangeName, routingKey)
+  private lazy val publisher: Stream[IO, WorkerMessage[Block] => IO[Unit]] =
+    RabbitUtils.createPublisher[WorkerMessage[Block]](rabbit, workerEventsExchangeName, routingKey)
 
-  def consumeReportableEvent: IO[ReportableEvent] =
+  def consumeReportMessage: IO[ReportMessage[Block]] =
     consumer.take(1).compile.last.map(_.get)
 
-  def publishWorkableEvent(e: WorkableEvent): IO[Unit] =
-    publisher.evalMap(p => p(e)).compile.drain
+  def publishWorkerMessage(message: WorkerMessage[Block]): IO[Unit] =
+    publisher.evalMap(p => p(message)).compile.drain
 
 }

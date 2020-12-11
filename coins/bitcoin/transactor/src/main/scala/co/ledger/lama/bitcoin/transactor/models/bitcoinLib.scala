@@ -68,12 +68,12 @@ object bitcoinLib {
   }
 
   case class SignatureMetadata(
-      derSignature: ByteString,
+      derSignature: Array[Byte],
       publicKey: String
   ) {
     def toProto: libgrpc.SignatureMetadata =
       libgrpc.SignatureMetadata(
-        derSignature,
+        ByteString.copyFrom(derSignature),
         publicKey = publicKey,
         addrEncoding = libgrpc.AddressEncoding.ADDRESS_ENCODING_P2PKH
       )
@@ -82,7 +82,7 @@ object bitcoinLib {
   object SignatureMetadata {
     def fromProto(proto: libgrpc.SignatureMetadata): SignatureMetadata =
       SignatureMetadata(
-        proto.derSignature,
+        proto.derSignature.toByteArray,
         proto.publicKey
       )
   }
