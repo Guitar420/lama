@@ -4,8 +4,6 @@
       "extended_public_key": "tpubDCrucad5KpPS3AD91ZXsSrTbiCCkXJPPo6qHsSuJCbnhSn9MCNaqsY6mvHPaMoCNSS2RHmT36qXhUqTJxqfidfLpM3oRdJJAgveXAfMXUGW",
       "scheme": "BIP44",
       "lookahead_size": 20,
-      "network": "TestNet3",
-      "coin_family": "bitcoin",
       "coin": "btc_testnet",
       "label" : "btc testnet account 1"
     },

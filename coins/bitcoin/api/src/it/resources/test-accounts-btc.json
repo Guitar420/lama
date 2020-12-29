@@ -4,8 +4,6 @@
       "extended_public_key": "xpub6DDeKs272C9xQyta6cxqz4JwVLFsVSHhv6dbj89ZptN7pt2QHtGt119YtXTKdfA5Hk2TD4F35FuyzXCEQujSDRowuVMnPfY57cnqmk2AKVX",
       "scheme": "BIP49",
       "lookahead_size": 20,
-      "network": "MainNet",
-      "coin_family": "bitcoin",
       "coin": "btc",
       "label" : "btc account 1"
     },
@@ -24,8 +22,6 @@
       "extended_public_key": "xpub6CKb86o7RHSCxuwP5dnxyDySLbnVWypQUxhWpycFZWFTzXuXy3UgGtG3o51oGER6X2UY6zRqd5AXgzNghb9va1FkfzXz6k1RT6EwTwCKejE",
       "scheme": "BIP49",
       "lookahead_size": 20,
-      "network": "MainNet",
-      "coin_family": "bitcoin",
       "coin": "btc"
     },
     "expected": {
@@ -43,8 +39,6 @@
       "extended_public_key": "xpub6DEHKg8fgKcb9at2u9Xhjtx4tXGyWqUPQAx2zNCzr41gQRyCqpCn7onSoJU4VS96GXyCtAhhFxErnG2pGVvVexaqF7DEfqGGnGk7Havn7C2",
       "scheme": "BIP84",
       "lookahead_size": 20,
-      "network": "MainNet",
-      "coin_family": "bitcoin",
       "coin": "btc",
       "label" : "btc account 3"
     },
@@ -63,8 +57,6 @@
       "extended_public_key": "xpub6BuPWhjLqutPV8SF4RMrrn8c3t7uBZbz4CBbThpbg9GYjqRMncra9mjgSfWSK7uMDz37hhzJ8wvkbDDQQJt6VgwLoszvmPiSBtLA1bPLLSn",
       "scheme": "BIP44",
       "lookahead_size": 20,
-      "network": "MainNet",
-      "coin_family": "bitcoin",
       "coin": "btc",
       "label" : "btc account 4"
     },
