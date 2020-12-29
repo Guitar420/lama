@@ -13,6 +13,7 @@ import co.ledger.lama.common.services.NotificationService
 import co.ledger.lama.common.utils.UuidUtils
 import co.ledger.lama.bitcoin.api.utils.RouterUtils._
 import co.ledger.lama.bitcoin.common.models.interpreter.ChangeType
+import co.ledger.lama.bitcoin.common.utils.CoinImplicits._
 import co.ledger.lama.bitcoin.common.clients.grpc.{
   InterpreterClient,
   KeychainClient,
@@ -116,14 +117,14 @@ object AccountController extends Http4sDsl[IO] with IOLogging {
             creationRequest.extendedPublicKey,
             creationRequest.scheme,
             creationRequest.lookaheadSize,
-            creationRequest.network
+            creationRequest.coin.toNetwork
           )
           _ <- log.info(s"Keychain created with id: ${createdKeychain.keychainId}")
           _ <- log.info("Registering account")
 
           account <- accountManagerClient.registerAccount(
             createdKeychain.keychainId,
-            creationRequest.coinFamily,
+            creationRequest.coin.coinFamily,
             creationRequest.coin,
             creationRequest.syncFrequency,
             creationRequest.label
@@ -132,7 +133,7 @@ object AccountController extends Http4sDsl[IO] with IOLogging {
           // This creates a new queue for this account notifications
           _ <- notificationService.createQueue(
             account.accountId,
-            creationRequest.coinFamily,
+            creationRequest.coin.coinFamily,
             creationRequest.coin
           )
 

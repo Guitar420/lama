@@ -3,7 +3,7 @@ package co.ledger.lama.bitcoin.api.models
 import java.util.UUID
 
 import cats.syntax.functor._
-import co.ledger.lama.bitcoin.common.models.{BitcoinNetwork, Scheme}
+import co.ledger.lama.bitcoin.common.models.Scheme
 import co.ledger.lama.common.models.implicits._
 import io.circe.{Decoder, Encoder, JsonObject}
 import io.circe.generic.extras.semiauto._
@@ -54,8 +54,6 @@ object accountManager {
       label: Option[String],
       scheme: Scheme,
       lookaheadSize: Int,
-      network: BitcoinNetwork,
-      coinFamily: CoinFamily,
       coin: Coin,
       syncFrequency: Option[Long]
   )

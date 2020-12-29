@@ -7,17 +7,17 @@ import pureconfig.error.CannotConvert
 
 import co.ledger.lama.manager.protobuf
 
-sealed abstract class Coin(val name: String) {
+sealed abstract class Coin(val name: String, val coinFamily: CoinFamily) {
   override def toString: String = name
 
   def toProto: protobuf.Coin
 }
 
 object Coin {
-  case object Btc extends Coin("btc") {
+  case object Btc extends Coin("btc", CoinFamily.Bitcoin) {
     def toProto: protobuf.Coin = protobuf.Coin.btc
   }
-  case object BtcTestnet extends Coin("btc_testnet") {
+  case object BtcTestnet extends Coin("btc_testnet", CoinFamily.Bitcoin) {
     def toProto: protobuf.Coin = protobuf.Coin.btc_testnet
   }
 
